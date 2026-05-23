@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Video Automation</title>
+<style>
+/* ── Reset & Base ─────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #0b0b18;
+  --surface:  #13132a;
+  --card:     #1c1c38;
+  --border:   #2a2a4a;
+  --accent:   #5b8af5;
+  --accent2:  #7c5bf5;
+  --success:  #2ecc71;
+  --warn:     #f39c12;
+  --danger:   #e74c3c;
+  --txt:      #e0e0f0;
+  --muted:    #7070a0;
+  --radius:   12px;
+  --sidebar:  220px;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+html, body { height: 100%; background: var(--bg); color: var(--txt); overflow: hidden; }
+input, select, textarea, button { font: inherit; }
+button { cursor: pointer; border: none; border-radius: 8px; transition: opacity .15s, background .15s; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+input, select { background: var(--bg); color: var(--txt); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 12px; width: 100%; outline: none; }
+input:focus, select:focus { border-color: var(--accent); }
+
+/* ── Layout ───────────────────────────────────────────────────── */
+.layout { display: flex; height: 100vh; }
+
+/* ── Sidebar ──────────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar); min-width: var(--sidebar);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 0 0 16px;
+}
+.sidebar-logo {
+  padding: 20px 18px 16px;
+  font-size: 17px; font-weight: 700;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: -.2px;
+}
+.sidebar-logo span { opacity: .6; font-weight: 400; font-size: 13px; display: block; margin-top: 2px; }
+.nav { flex: 1; padding: 12px 0; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 18px; cursor: pointer; border-radius: 0;
+  color: var(--muted); font-size: 14px; font-weight: 500;
+  transition: background .12s, color .12s;
+  user-select: none;
+}
+.nav-item:hover { background: rgba(91,138,245,.08); color: var(--txt); }
+.nav-item.active { background: rgba(91,138,245,.15); color: var(--accent); border-right: 3px solid var(--accent); }
+.nav-icon { font-size: 17px; width: 22px; text-align: center; }
+.sidebar-footer { padding: 12px 18px 0; }
+.status-pill {
+  display: flex; align-items: center; gap: 7px;
+  padding: 8px 12px; border-radius: 20px;
+  background: var(--card); font-size: 12px; color: var(--muted);
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.dot.green { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.dot.orange { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+
+/* ── Main area ────────────────────────────────────────────────── */
+.main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.topbar {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 14px 28px; display: flex; align-items: center; justify-content: space-between;
+  position: sticky; top: 0; z-index: 10;
+}
+.topbar-title { font-size: 17px; font-weight: 600; }
+.topbar-right { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); }
+.badge {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 20px; padding: 4px 12px; font-size: 12px;
+}
+.content { padding: 24px 28px; flex: 1; }
+
+/* ── Pages ────────────────────────────────────────────────────── */
+.page { display: none; }
+.page.active { display: block; }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px;
+}
+.card-title {
+  font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--muted); margin-bottom: 14px;
+}
+.card-title.big { font-size: 15px; text-transform: none; letter-spacing: 0; color: var(--txt); }
+
+/* ── Stat cards ───────────────────────────────────────────────── */
+.stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+.stat-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px 20px;
+  display: flex; flex-direction: column;
+}
+.stat-num { font-size: 36px; font-weight: 700; line-height: 1; }
+.stat-label { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.stat-card:nth-child(1) .stat-num { color: var(--accent); }
+.stat-card:nth-child(2) .stat-num { color: var(--success); }
+.stat-card:nth-child(3) .stat-num { color: var(--warn); }
+.stat-card:nth-child(4) .stat-num { color: #a56cff; }
+
+/* ── Scheduler banner ─────────────────────────────────────────── */
+.sched-banner {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 18px 22px;
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px;
+}
+.sched-info h3 { font-size: 15px; margin-bottom: 4px; }
+.sched-info p  { font-size: 12px; color: var(--muted); }
+
+/* ── Two-column grid ──────────────────────────────────────────── */
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+/* ── Table ────────────────────────────────────────────────────── */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; }
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,.03); }
+
+/* ── Buttons ──────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 18px; border-radius: 8px; font-size: 13px; font-weight: 600;
+  transition: filter .15s;
+}
+.btn:hover:not(:disabled) { filter: brightness(1.12); }
+.btn-primary { background: var(--accent); color: #fff; }
+.btn-success { background: var(--success); color: #fff; }
+.btn-danger  { background: var(--danger); color: #fff; }
+.btn-ghost   { background: var(--border); color: var(--txt); }
+.btn-sm      { padding: 5px 12px; font-size: 12px; }
+.btn-lg      { padding: 12px 24px; font-size: 15px; }
+
+/* ── Form elements ────────────────────────────────────────────── */
+.form-group { margin-bottom: 16px; }
+.form-group label { display: block; font-size: 12px; font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px; }
+.form-row { display: flex; gap: 8px; align-items: center; }
+.form-row input { flex: 1; }
+.hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.eye-btn { background: var(--border); color: var(--muted); padding: 8px 11px;
+  border-radius: 7px; font-size: 14px; flex-shrink: 0; }
+.eye-btn:hover { color: var(--txt); }
+.section-sep { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+
+/* ── Progress bar ─────────────────────────────────────────────── */
+.progress-wrap { background: var(--bg); border-radius: 6px; height: 8px; overflow: hidden; margin: 10px 0; }
+.progress-bar  { height: 100%; border-radius: 6px; background: var(--accent);
+  transition: width .4s ease; width: 0%; }
+
+/* ── Log console ──────────────────────────────────────────────── */
+.log-console {
+  background: #07070f; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; font-family: "Courier New", Courier, monospace;
+  font-size: 12px; color: #b0b0d0; line-height: 1.7;
+  overflow-y: auto; height: 380px;
+}
+.log-console .line-info  { color: #8eb4f5; }
+.log-console .line-error { color: #f5867e; }
+.log-console .line-warn  { color: #f5d08e; }
+.log-console .line-debug { color: var(--muted); }
+
+/* ── Niche grid ───────────────────────────────────────────────── */
+.niche-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.niche-card {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px 18px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.niche-card:hover { border-color: var(--accent); }
+.niche-header { display: flex; align-items: center; gap: 9px; }
+.niche-icon { font-size: 22px; }
+.niche-name { font-size: 14px; font-weight: 600; }
+.niche-desc { font-size: 12px; color: var(--muted); line-height: 1.4; }
+.niche-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.tag { background: var(--bg); border: 1px solid var(--border); border-radius: 12px;
+  padding: 2px 9px; font-size: 11px; color: var(--muted); }
+.niche-actions { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+
+/* ── Toggle switch ────────────────────────────────────────────── */
+.toggle-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.toggle { position: relative; display: inline-block; width: 34px; height: 18px; }
+.toggle input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+  position: absolute; inset: 0; background: var(--border); border-radius: 18px;
+  transition: background .2s; cursor: pointer;
+}
+.toggle-slider::before {
+  content: ""; position: absolute; height: 12px; width: 12px; border-radius: 50%;
+  left: 3px; bottom: 3px; background: #fff; transition: transform .2s;
+}
+.toggle input:checked + .toggle-slider { background: var(--accent); }
+.toggle input:checked + .toggle-slider::before { transform: translateX(16px); }
+
+/* ── Section dividers ─────────────────────────────────────────── */
+.section-heading {
+  font-size: 13px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .7px; color: var(--accent); margin: 28px 0 16px;
+  display: flex; align-items: center; gap: 8px;
+}
+.section-heading::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+/* ── Alerts / toasts ──────────────────────────────────────────── */
+.toast-wrap { position: fixed; top: 20px; right: 20px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+.toast {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 10px; padding: 12px 18px; font-size: 13px;
+  box-shadow: 0 4px 24px rgba(0,0,0,.4);
+  animation: slideIn .2s ease; max-width: 320px;
+}
+.toast.success { border-color: var(--success); color: var(--success); }
+.toast.error   { border-color: var(--danger);  color: var(--danger); }
+@keyframes slideIn { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ── Generate output box ──────────────────────────────────────── */
+.gen-output {
+  background: #07070f; border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 14px 16px; font-family: monospace; font-size: 12px;
+  color: #b0d0b0; line-height: 1.8; min-height: 160px; max-height: 280px; overflow-y: auto;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+
+/* ── Responsive ───────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .two-col    { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+<!-- ── Sidebar ─────────────────────────────────────────────────── -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    🎬 VideoBot
+    <span>YouTube &amp; TikTok Automation</span>
+  </div>
+  <div class="nav">
+    <div class="nav-item active" data-page="dashboard"><span class="nav-icon">📊</span>Dashboard</div>
+    <div class="nav-item" data-page="generate"><span class="nav-icon">⚡</span>Generate Video</div>
+    <div class="nav-item" data-page="settings"><span class="nav-icon">🔑</span>API Settings</div>
+    <div class="nav-item" data-page="niches"><span class="nav-icon">🎯</span>Niches</div>
+    <div class="nav-item" data-page="logs"><span class="nav-icon">📋</span>Live Logs</div>
+  </div>
+  <div class="sidebar-footer">
+    <div class="status-pill" id="schedulerPill">
+      <div class="dot" id="schedDot"></div>
+      <span id="schedPillText">Scheduler off</span>
+    </div>
+  </div>
+</nav>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<div class="main">
+  <div class="topbar">
+    <div class="topbar-title" id="topTitle">Dashboard</div>
+    <div class="topbar-right">
+      <span id="topDate" class="badge"></span>
+      <button class="btn btn-ghost btn-sm" onclick="refreshAll()">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- ───────────── DASHBOARD ───────────── -->
+    <div class="page active" id="page-dashboard">
+      <div class="stats-grid">
+        <div class="stat-card"><div class="stat-num" id="statTotal">—</div><div class="stat-label">Total Videos</div></div>
+        <div class="stat-card"><div class="stat-num" id="statToday">—</div><div class="stat-label">Generated Today</div></div>
+        <div class="stat-card"><div class="stat-num" id="statUploads">—</div><div class="stat-label">Successful Uploads</div></div>
+        <div class="stat-card"><div class="stat-num" id="statNiches">8</div><div class="stat-label">Active Niches</div></div>
+      </div>
+
+      <div class="sched-banner">
+        <div class="sched-info">
+          <h3>Daily Scheduler</h3>
+          <p id="schedInfo">Generates 5–10 videos per day, spread evenly across the day</p>
+        </div>
+        <button class="btn btn-success btn-lg" id="schedBtn" onclick="toggleScheduler()">▶ Start Scheduler</button>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-title big">Recent Videos</div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Niche</th><th>Platform</th><th>Title</th><th>Date</th></tr></thead>
+              <tbody id="recentTable"><tr><td colspan="4" style="color:var(--muted);text-align:center">Loading…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title big">By Niche</div>
+          <div id="nicheChart"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ───────────── GENERATE ───────────── -->
+    <div class="page" id="page-generate">
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-title big">Generate Video Now</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:14px;align-items:end;margin-top:8px">
+          <div class="form-group" style="margin:0">
+            <label>Niche</label>
+            <select id="genNiche">
+              <option value="tech">💻 Technology</option>
+              <option value="finance">💰 Finance &amp; Money</option>
+              <option value="motivation">🔥 Motivation</option>
+              <option value="health">💪 Health &amp; Fitness</option>
+              <option value="ai">🤖 Artificial Intelligence</option>
+              <option value="science">🔬 Science Facts</option>
+              <option value="history">📜 History Facts</option>
+              <option value="news">📰 World News</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Platform</label>
+            <select id="genPlatform">
+              <option value="youtube">▶ YouTube</option>
+              <option value="tiktok">🎵 TikTok</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0">
+            <label>Format</label>
+            <select id="genFormat" disabled>
+              <option>Auto (from platform)</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-lg" id="genBtn" onclick="startGenerate()" style="height:38px">⚡ Generate</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title big" style="margin:0">Progress</div>
+          <span id="genStepLabel" style="font-size:13px;color:var(--muted)">Ready</span>
+        </div>
+        <div class="progress-wrap"><div class="progress-bar" id="genProgress"></div></div>
+        <div class="gen-output" id="genOutput">Press ⚡ Generate to start…</div>
+      </div>
+    </div>
+
+    <!-- ───────────── API SETTINGS ───────────── -->
+    <div class="page" id="page-settings">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+        <div>
+          <h2 style="font-size:18px;margin-bottom:4px">API Settings</h2>
+          <p style="font-size:13px;color:var(--muted)">All values are saved to your <code style="background:var(--card);padding:2px 6px;border-radius:4px">.env</code> file.</p>
+        </div>
+        <button class="btn btn-primary btn-lg" onclick="saveSettings()">💾 Save All Settings</button>
+      </div>
+
+      <!-- AI -->
+      <div class="section-heading">🤖 AI / Content Generation</div>
+      <div class="card" style="margin-bottom:18px">
+        <div class="form-group">
+          <label>Anthropic API Key <span style="color:var(--danger)">*</span></label>
+          <div class="form-row">
+            <input type="password" id="ANTHROPIC_API_KEY" placeholder="sk-ant-api03-…  (required for script generation)">
+            <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+          </div>
+          <div class="hint">Get yours at <strong>console.anthropic.com</strong> — required for AI script generation.</div>
+        </div>
+      </div>
+
+      <!-- Media -->
+      <div class="section-heading">🖼️ Media — Pexels (optional)</div>
+      <div class="card" style="margin-bottom:18px">
+        <div class="form-group">
+          <label>Pexels API Key</label>
+          <div class="form-row">
+            <input type="password" id="PEXELS_API_KEY" placeholder="Free at pexels.com/api — used for stock images">
+            <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+          </div>
+          <div class="hint">Free tier: 200 requests/hour.</div>
+        </div>
+      </div>
+
+      <!-- News -->
+      <div class="section-heading">📰 News Data — NewsAPI (optional)</div>
+      <div class="card" style="margin-bottom:18px">
+        <div class="form-group">
+          <label>NewsAPI Key</label>
+          <div class="form-row">
+            <input type="password" id="NEWS_API_KEY" placeholder="Free at newsapi.org — improves topic collection">
+            <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+          </div>
+          <div class="hint">Free tier: 100 requests/day.</div>
+        </div>
+      </div>
+
+      <!-- YouTube -->
+      <div class="section-heading">▶ YouTube Upload</div>
+      <div class="card" style="margin-bottom:18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>Client ID</label>
+            <div class="form-row">
+              <input type="password" id="YOUTUBE_CLIENT_ID" placeholder="From Google Cloud Console">
+              <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Client Secret</label>
+            <div class="form-row">
+              <input type="password" id="YOUTUBE_CLIENT_SECRET" placeholder="From Google Cloud Console">
+              <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Refresh Token</label>
+          <div class="form-row">
+            <input type="password" id="YOUTUBE_REFRESH_TOKEN" placeholder="Run: python main.py setup --platform youtube">
+            <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+          </div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted)">
+          <strong style="color:var(--txt)">Setup steps:</strong><br>
+          1. Go to <strong>console.cloud.google.com</strong> → create a project → enable <em>YouTube Data API v3</em><br>
+          2. Create OAuth 2.0 credentials (Desktop app) → download JSON → save as <code>credentials/youtube_client_secrets.json</code><br>
+          3. Run <code>python main.py setup --platform youtube</code> to authenticate and get the refresh token.
+        </div>
+      </div>
+
+      <!-- TikTok -->
+      <div class="section-heading">🎵 TikTok Upload</div>
+      <div class="card" style="margin-bottom:18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>Client Key</label>
+            <div class="form-row">
+              <input type="password" id="TIKTOK_CLIENT_KEY" placeholder="From developers.tiktok.com">
+              <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Client Secret</label>
+            <div class="form-row">
+              <input type="password" id="TIKTOK_CLIENT_SECRET" placeholder="From developers.tiktok.com">
+              <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+            </div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Access Token</label>
+          <div class="form-row">
+            <input type="password" id="TIKTOK_ACCESS_TOKEN" placeholder="Generate via OAuth after app approval">
+            <button class="eye-btn" onclick="toggleSecret(this)">👁</button>
+          </div>
+        </div>
+        <div style="background:var(--bg);border-radius:8px;padding:12px 14px;font-size:12px;color:var(--muted)">
+          <strong style="color:var(--txt)">Setup steps:</strong><br>
+          1. Go to <strong>developers.tiktok.com</strong> → create an app → apply for <em>Content Posting API</em><br>
+          2. Wait for approval (1–5 business days)<br>
+          3. Generate an access token via OAuth 2.0 and paste it above.
+        </div>
+      </div>
+
+      <!-- App Settings -->
+      <div class="section-heading">⚙️ App Settings</div>
+      <div class="card" style="margin-bottom:18px">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>Videos Per Day</label>
+            <input type="number" id="VIDEOS_PER_DAY" min="1" max="20" placeholder="8">
+            <div class="hint">How many videos to generate daily (5–10 recommended)</div>
+          </div>
+          <div class="form-group">
+            <label>Output Directory</label>
+            <input type="text" id="OUTPUT_DIR" placeholder="output">
+          </div>
+          <div class="form-group">
+            <label>TTS Language</label>
+            <input type="text" id="TTS_LANGUAGE" placeholder="en">
+            <div class="hint">e.g. en, es, fr, de, hi, pt</div>
+          </div>
+          <div class="form-group">
+            <label>YouTube Video Duration (sec)</label>
+            <input type="number" id="YOUTUBE_VIDEO_DURATION" min="60" max="1800" placeholder="300">
+          </div>
+          <div class="form-group">
+            <label>TikTok Video Duration (sec)</label>
+            <input type="number" id="TIKTOK_VIDEO_DURATION" min="15" max="180" placeholder="60">
+          </div>
+          <div class="form-group">
+            <label>Log Level</label>
+            <select id="LOG_LEVEL">
+              <option>DEBUG</option><option selected>INFO</option>
+              <option>WARNING</option><option>ERROR</option>
+            </select>
+          </div>
+        </div>
+
+        <hr class="section-sep">
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div class="form-group">
+            <label>Upload to YouTube</label>
+            <select id="UPLOAD_TO_YOUTUBE">
+              <option value="true">Yes — upload automatically</option>
+              <option value="false">No — save locally only</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Upload to TikTok</label>
+            <select id="UPLOAD_TO_TIKTOK">
+              <option value="true">Yes — upload automatically</option>
+              <option value="false">No — save locally only</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:12px;padding-bottom:24px">
+        <button class="btn btn-ghost" onclick="loadSettings()">↺ Reset</button>
+        <button class="btn btn-primary btn-lg" onclick="saveSettings()">💾 Save All Settings</button>
+      </div>
+    </div>
+
+    <!-- ───────────── NICHES ───────────── -->
+    <div class="page" id="page-niches">
+      <div style="margin-bottom:18px">
+        <h2 style="font-size:18px;margin-bottom:4px">Niche Management</h2>
+        <p style="font-size:13px;color:var(--muted)">Choose which niches are active and on which platforms they post.</p>
+      </div>
+      <div class="niche-grid" id="nicheGrid">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+    <!-- ───────────── LOGS ───────────── -->
+    <div class="page" id="page-logs">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h2 style="font-size:18px">Live Logs</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost btn-sm" onclick="clearLogs()">🗑 Clear</button>
+          <button class="btn btn-ghost btn-sm" onclick="copyLogs()">📋 Copy</button>
+        </div>
+      </div>
+      <div class="log-console" id="logConsole"></div>
+    </div>
+
+  </div><!-- .content -->
+</div><!-- .main -->
+</div><!-- .layout -->
+
+<!-- Toast container -->
+<div class="toast-wrap" id="toastWrap"></div>
+
+<script>
+// ── Routing ──────────────────────────────────────────────────────────────────
+const PAGE_TITLES = {
+  dashboard: "Dashboard", generate: "Generate Video",
+  settings: "API Settings", niches: "Niches", logs: "Live Logs"
+};
+
+function showPage(name) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  document.getElementById("page-" + name).classList.add("active");
+  document.querySelector(`.nav-item[data-page="${name}"]`).classList.add("active");
+  document.getElementById("topTitle").textContent = PAGE_TITLES[name] || name;
+  if (name === "dashboard") { loadStats(); loadRecentVideos(); }
+  if (name === "settings")  loadSettings();
+  if (name === "niches")    loadNiches();
+}
+
+document.querySelectorAll(".nav-item").forEach(item => {
+  item.addEventListener("click", () => showPage(item.dataset.page));
+});
+
+// ── Date ─────────────────────────────────────────────────────────────────────
+document.getElementById("topDate").textContent = new Date().toLocaleDateString("en-US", {
+  weekday: "short", year: "numeric", month: "short", day: "numeric"
+});
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = "success") {
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = (type === "success" ? "✓ " : "✗ ") + msg;
+  document.getElementById("toastWrap").appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+async function loadStats() {
+  try {
+    const r = await fetch("/api/stats");
+    const d = await r.json();
+    document.getElementById("statTotal").textContent   = d.total_videos ?? 0;
+    document.getElementById("statToday").textContent   = d.today ?? 0;
+    document.getElementById("statUploads").textContent = d.successful_uploads ?? 0;
+    const n = Object.keys(d.by_niche || {}).length;
+    document.getElementById("statNiches").textContent  = n || 8;
+
+    // Niche breakdown chart
+    const chartEl = document.getElementById("nicheChart");
+    const byNiche = d.by_niche || {};
+    if (Object.keys(byNiche).length === 0) {
+      chartEl.innerHTML = '<p style="color:var(--muted);font-size:13px;text-align:center;padding:20px">No videos yet</p>';
+      return;
+    }
+    const max = Math.max(...Object.values(byNiche));
+    chartEl.innerHTML = Object.entries(byNiche)
+      .sort((a,b) => b[1] - a[1])
+      .map(([niche, count]) => `
+        <div style="margin-bottom:10px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span>${NICHE_ICONS[niche]||"📌"} ${niche}</span>
+            <span style="color:var(--muted)">${count}</span>
+          </div>
+          <div style="background:var(--bg);border-radius:4px;height:6px;overflow:hidden">
+            <div style="background:var(--accent);height:100%;width:${(count/max)*100}%;border-radius:4px"></div>
+          </div>
+        </div>`
+      ).join("");
+  } catch(e) { console.error(e); }
+}
+
+async function loadRecentVideos() {
+  try {
+    const r = await fetch("/api/recent_videos");
+    const rows = await r.json();
+    const tbody = document.getElementById("recentTable");
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No videos yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(v => `
+      <tr>
+        <td>${NICHE_ICONS[v.niche]||""} ${v.niche}</td>
+        <td>${v.platform === "youtube" ? "▶ YT" : "🎵 TT"}</td>
+        <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${v.title||"—"}</td>
+        <td style="color:var(--muted)">${(v.created_at||"").slice(0,16)}</td>
+      </tr>`).join("");
+  } catch(e) { console.error(e); }
+}
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+let schedRunning = false;
+async function toggleScheduler() {
+  const endpoint = schedRunning ? "/api/scheduler/stop" : "/api/scheduler/start";
+  const r = await fetch(endpoint, { method: "POST" });
+  const d = await r.json();
+  if (d.ok) {
+    schedRunning = !schedRunning;
+    updateSchedulerUI();
+  } else {
+    toast(d.error || "Scheduler error", "error");
+  }
+}
+function updateSchedulerUI() {
+  const btn = document.getElementById("schedBtn");
+  const dot = document.getElementById("schedDot");
+  const pill = document.getElementById("schedPillText");
+  const info = document.getElementById("schedInfo");
+  if (schedRunning) {
+    btn.textContent = "⏹ Stop Scheduler";
+    btn.className = "btn btn-danger btn-lg";
+    dot.className = "dot green";
+    pill.textContent = "Scheduler running";
+    info.textContent = "Generating videos on schedule — check Logs for progress";
+  } else {
+    btn.textContent = "▶ Start Scheduler";
+    btn.className = "btn btn-success btn-lg";
+    dot.className = "dot";
+    pill.textContent = "Scheduler off";
+    info.textContent = "Generates 5–10 videos per day, spread evenly across the day";
+  }
+}
+async function pollSchedulerStatus() {
+  try {
+    const r = await fetch("/api/scheduler/status");
+    const d = await r.json();
+    if (d.running !== schedRunning) {
+      schedRunning = d.running;
+      updateSchedulerUI();
+    }
+  } catch(e) {}
+  setTimeout(pollSchedulerStatus, 5000);
+}
+pollSchedulerStatus();
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+const SETTINGS_KEYS = [
+  "ANTHROPIC_API_KEY", "PEXELS_API_KEY", "NEWS_API_KEY",
+  "YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN",
+  "TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET", "TIKTOK_ACCESS_TOKEN",
+  "VIDEOS_PER_DAY", "OUTPUT_DIR", "TTS_LANGUAGE", "LOG_LEVEL",
+  "YOUTUBE_VIDEO_DURATION", "TIKTOK_VIDEO_DURATION",
+  "UPLOAD_TO_YOUTUBE", "UPLOAD_TO_TIKTOK"
+];
+async function loadSettings() {
+  try {
+    const r = await fetch("/api/settings");
+    const d = await r.json();
+    SETTINGS_KEYS.forEach(key => {
+      const el = document.getElementById(key);
+      if (!el) return;
+      const val = d[key] || "";
+      if (el.tagName === "SELECT") {
+        [...el.options].forEach(o => { if (o.value === val) o.selected = true; });
+      } else {
+        el.value = val;
+      }
+    });
+  } catch(e) { toast("Failed to load settings", "error"); }
+}
+async function saveSettings() {
+  const payload = {};
+  SETTINGS_KEYS.forEach(key => {
+    const el = document.getElementById(key);
+    if (el) payload[key] = el.value;
+  });
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (d.ok) toast("Settings saved to .env");
+    else toast(d.error || "Save failed", "error");
+  } catch(e) { toast("Save error: " + e.message, "error"); }
+}
+function toggleSecret(btn) {
+  const inp = btn.previousElementSibling;
+  inp.type = inp.type === "password" ? "text" : "password";
+  btn.textContent = inp.type === "password" ? "👁" : "🙈";
+}
+
+// ── Generate ──────────────────────────────────────────────────────────────────
+let genSSE = null;
+async function startGenerate() {
+  const btn = document.getElementById("genBtn");
+  const progress = document.getElementById("genProgress");
+  const out = document.getElementById("genOutput");
+  const stepLabel = document.getElementById("genStepLabel");
+
+  btn.disabled = true;
+  progress.style.width = "0%";
+  out.textContent = "";
+  stepLabel.textContent = "Starting…";
+
+  const payload = {
+    niche: document.getElementById("genNiche").value,
+    platform: document.getElementById("genPlatform").value
+  };
+
+  try {
+    const r = await fetch("/api/generate", {
+      method: "POST", headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    if (!d.ok) { toast(d.error, "error"); btn.disabled = false; return; }
+  } catch(e) { toast("Request error: " + e, "error"); btn.disabled = false; return; }
+
+  if (genSSE) genSSE.close();
+  genSSE = new EventSource("/api/generate/stream");
+  genSSE.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    progress.style.width = (d.progress * 100).toFixed(1) + "%";
+    stepLabel.textContent = d.step || "";
+    if (d.output && d.output.length) {
+      out.textContent = d.output.join("\n");
+      out.scrollTop = out.scrollHeight;
+    }
+    if (!d.running) {
+      genSSE.close();
+      btn.disabled = false;
+      if (d.error) {
+        toast("Generation failed: " + d.error, "error");
+        stepLabel.textContent = "❌ Error";
+      } else {
+        toast("Video generated successfully!");
+        stepLabel.textContent = "✅ Done";
+        loadStats();
+        loadRecentVideos();
+      }
+    }
+  };
+  genSSE.onerror = () => { genSSE.close(); btn.disabled = false; };
+}
+
+// ── Niches ────────────────────────────────────────────────────────────────────
+const NICHE_ICONS = {
+  tech: "💻", finance: "💰", motivation: "🔥", health: "💪",
+  ai: "🤖", science: "🔬", history: "📜", news: "📰"
+};
+async function loadNiches() {
+  try {
+    const r = await fetch("/api/niches");
+    const niches = await r.json();
+    const grid = document.getElementById("nicheGrid");
+    grid.innerHTML = niches.map(n => `
+      <div class="niche-card">
+        <div class="niche-header">
+          <span class="niche-icon">${NICHE_ICONS[n.name]||"📌"}</span>
+          <span class="niche-name">${n.display_name}</span>
+        </div>
+        <div class="niche-desc">${n.keywords.slice(0,3).join(" · ")}</div>
+        <div class="niche-tags">
+          ${n.keywords.slice(0,4).map(k=>`<span class="tag">${k}</span>`).join("")}
+        </div>
+        <div class="niche-actions">
+          <label class="toggle-wrap">
+            <label class="toggle"><input type="checkbox" checked id="yt_${n.name}"><span class="toggle-slider"></span></label>
+            YouTube
+          </label>
+          <label class="toggle-wrap" style="margin-left:10px">
+            <label class="toggle"><input type="checkbox" checked id="tt_${n.name}"><span class="toggle-slider"></span></label>
+            TikTok
+          </label>
+          <button class="btn btn-primary btn-sm" style="margin-left:auto"
+            onclick="quickGenerate('${n.name}')">⚡ Generate</button>
+        </div>
+      </div>`).join("");
+  } catch(e) { console.error(e); }
+}
+function quickGenerate(niche) {
+  document.getElementById("genNiche").value = niche;
+  showPage("generate");
+  startGenerate();
+}
+
+// ── Live Logs ─────────────────────────────────────────────────────────────────
+let logSSE = null;
+function connectLogs() {
+  if (logSSE) logSSE.close();
+  logSSE = new EventSource("/api/logs/stream");
+  logSSE.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (!d.message) return;
+    appendLog(d.message);
+  };
+}
+function appendLog(msg) {
+  const c = document.getElementById("logConsole");
+  const div = document.createElement("div");
+  let cls = "line-info";
+  if (/\[ERROR\]|\[CRITICAL\]/.test(msg)) cls = "line-error";
+  else if (/\[WARNING\]/.test(msg)) cls = "line-warn";
+  else if (/\[DEBUG\]/.test(msg)) cls = "line-debug";
+  div.className = cls;
+  div.textContent = msg;
+  c.appendChild(div);
+  c.scrollTop = c.scrollHeight;
+  // Trim to 500 lines
+  while (c.children.length > 500) c.removeChild(c.firstChild);
+}
+function clearLogs() {
+  document.getElementById("logConsole").innerHTML = "";
+}
+function copyLogs() {
+  const txt = [...document.getElementById("logConsole").children].map(l=>l.textContent).join("\n");
+  navigator.clipboard.writeText(txt).then(() => toast("Logs copied"));
+}
+
+// ── Refresh all ───────────────────────────────────────────────────────────────
+function refreshAll() {
+  loadStats();
+  loadRecentVideos();
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+(function init() {
+  connectLogs();
+  loadStats();
+  loadRecentVideos();
+  setInterval(loadStats, 30000);      // refresh stats every 30s
+})();
+</script>
+</body>
+</html>
