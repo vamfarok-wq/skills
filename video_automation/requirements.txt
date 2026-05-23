@@ -1,21 +1,41 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
 anthropic>=0.25.0
 flask>=3.0.0
-moviepy>=2.0.0
-Pillow>=9.2.0,<12.0
-gTTS>=2.5.0
-requests>=2.31.0
 python-dotenv>=1.0.0
-google-api-python-client>=2.127.0
-google-auth-httplib2>=0.2.0
-google-auth-oauthlib>=1.2.0
-feedparser>=6.0.11
-numpy>=1.26.0
-pydub>=0.25.1
-APScheduler>=3.10.4
-tqdm>=4.66.0
-colorlog>=6.8.0
+requests>=2.31.0
+
+# ── Video ─────────────────────────────────────────────────────────────────────
+# moviepy 2.x + imageio-ffmpeg bundles its own ffmpeg — no system install needed
+moviepy>=2.0.0
 imageio>=2.34.0
 imageio-ffmpeg>=0.5.0
 decorator>=5.0.0
 proglog>=0.1.9
-pyttsx3>=2.90
+
+# Pillow: pre-built Windows wheels available for 3.10–3.13
+# If you get a build error on 3.14, install manually:
+#   pip install pillow --pre --no-cache-dir
+Pillow>=10.0.0,<12.0
+
+# numpy: pre-built wheels for 3.10–3.13; 3.14 may need --pre
+numpy>=1.26.0,<3.0
+
+# ── Text to Speech ────────────────────────────────────────────────────────────
+gTTS>=2.5.0          # online TTS (Google) — best quality
+pyttsx3>=2.90        # offline TTS: Windows=SAPI5 (built-in), Linux=espeak-ng, Mac=NSSpeech
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+APScheduler>=3.10.4
+pytz>=2024.1
+tzlocal>=5.0
+
+# ── Google / YouTube ──────────────────────────────────────────────────────────
+google-api-python-client>=2.127.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+feedparser>=6.0.11
+colorlog>=6.8.0
+tqdm>=4.66.0
+pydub>=0.25.1
