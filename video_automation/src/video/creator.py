@@ -36,11 +36,19 @@ SIZES = {
 }
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
 class VideoCreator:
     def __init__(self, config):
         self.config = config
         self.font_path = self._find_font()
-        os.makedirs(config.OUTPUT_DIR, exist_ok=True)
+        # Resolve output dir relative to project root for consistent paths on Windows
+        out = config.OUTPUT_DIR or "output"
+        if not os.path.isabs(out):
+            out = str(_PROJECT_ROOT / out)
+        self.output_dir = out
+        os.makedirs(self.output_dir, exist_ok=True)
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -93,7 +101,7 @@ class VideoCreator:
 
         # 4. Export
         ts = int(time.time())
-        out_file = os.path.join(self.config.OUTPUT_DIR, f"{niche_name}_{platform}_{ts}.mp4")
+        out_file = os.path.join(self.output_dir, f"{niche_name}_{platform}_{ts}.mp4")
         logger.info("Exporting → %s", out_file)
         write_kwargs = dict(fps=24, codec="libx264", audio_codec="aac", logger=None)
         try:
@@ -237,16 +245,19 @@ class VideoCreator:
             draw.text((x, y0 + i * line_h), line, font=font, fill=color)
 
     def _tts(self, text: str) -> str | None:
-        # Try gTTS (online) first
+        # 1. Try gTTS (online — best quality)
         try:
             tts = gTTS(text=text, lang=self.config.TTS_LANGUAGE, slow=False)
             path = tempfile.mktemp(suffix=".mp3")
             tts.save(path)
             return path
         except Exception as exc:
-            logger.warning("gTTS failed (%s) — trying offline TTS …", exc)
+            logger.warning("gTTS failed (%s) — falling back to offline TTS …", exc)
 
-        # Fall back to pyttsx3 (offline, requires espeak-ng)
+        # 2. pyttsx3 — offline TTS
+        #    Windows: uses built-in SAPI5 (no extra install needed)
+        #    Linux:   requires espeak-ng  (sudo apt install espeak-ng)
+        #    Mac:     uses NSSpeechSynthesizer
         try:
             import pyttsx3
             engine = pyttsx3.init()
@@ -254,20 +265,22 @@ class VideoCreator:
             engine.save_to_file(text, path)
             engine.runAndWait()
             engine.stop()
+            # Give SAPI5 a moment to flush the file on Windows
+            import time as _t
+            _t.sleep(0.3)
             if os.path.exists(path) and os.path.getsize(path) > 0:
                 return path
         except Exception as exc:
-            logger.warning("pyttsx3 failed (%s) — generating silent audio …", exc)
+            logger.warning("pyttsx3 failed (%s) — using silent audio …", exc)
 
-        # Last resort: generate silence so video still renders
-        return self._silent_audio(len(text.split()) * 0.4)  # ~0.4s per word
+        # 3. Last resort: silent audio so the video still renders
+        return self._silent_audio(len(text.split()) * 0.4)
 
     def _silent_audio(self, duration_seconds: float) -> str:
-        """Create a silent WAV file of the given duration."""
-        import wave, struct, math
+        import wave, struct
         path = tempfile.mktemp(suffix=".wav")
         sample_rate = 22050
-        n_samples = int(sample_rate * duration_seconds)
+        n_samples = int(sample_rate * max(duration_seconds, 1.0))
         with wave.open(path, "w") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
@@ -276,17 +289,32 @@ class VideoCreator:
         return path
 
     def _find_font(self) -> str | None:
+        # Project font (downloaded by setup)
+        project_font = os.path.normpath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "assets", "fonts", "Roboto-Bold.ttf")
+        )
         candidates = [
+            project_font,
+            # Windows system fonts
+            r"C:\Windows\Fonts\arialbd.ttf",
+            r"C:\Windows\Fonts\Arial Bold.ttf",
+            r"C:\Windows\Fonts\calibrib.ttf",
+            r"C:\Windows\Fonts\verdanab.ttf",
+            r"C:\Windows\Fonts\seguisb.ttf",
+            r"C:\Windows\Fonts\tahoma.ttf",
+            # Linux system fonts
             "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
             "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
             "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
             "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
+            # macOS system fonts
+            "/Library/Fonts/Arial Bold.ttf",
+            "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
             "/System/Library/Fonts/Helvetica.ttc",
-            os.path.join(os.path.dirname(__file__), "../../assets/fonts/Roboto-Bold.ttf"),
         ]
         for p in candidates:
             if os.path.exists(p):
                 logger.debug("Using font: %s", p)
                 return p
-        logger.warning("No TTF font found; using PIL default font (text may look small)")
+        logger.warning("No TTF font found — PIL default font will be used (text may appear small)")
         return None

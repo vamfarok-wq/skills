@@ -5,9 +5,14 @@ from datetime import datetime
 from pathlib import Path
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
 class DatabaseManager:
-    def __init__(self, db_path: str = "automation.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str | None = None):
+        # Default to project root so the DB is always in the same place
+        # regardless of the working directory (important on Windows).
+        self.db_path = db_path or str(_PROJECT_ROOT / "automation.db")
         self._init_db()
 
     def _conn(self) -> sqlite3.Connection:

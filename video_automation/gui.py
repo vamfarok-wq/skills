@@ -113,7 +113,7 @@ def api_stats():
 def api_recent_videos():
     try:
         import sqlite3
-        conn = sqlite3.connect(_BASE / "automation.db")
+        conn = sqlite3.connect(str(_BASE / "automation.db"))
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT niche, platform, title, status, created_at FROM videos ORDER BY created_at DESC LIMIT 20"
