@@ -2720,25 +2720,30 @@ def ai_exit_confidence(df, pos, current_price, profit):
         if symbol is None:
             return 0.5
 
-        pip = symbol.point * 10
-
-        # Build base features using the correct function
-        ms_signal, ms_conf, ms_data = get_mss_signal(df)
         features_dict = generate_smc_features(df, None, False)
 
         if features_dict is None:
             return 0.5
 
-        # Convert to list using the canonical 36-feature list
         feature_vector = [float(features_dict.get(name, 0.0)) for name in FEATURE_NAMES]
 
-        # 🔥 ADD EXIT-SPECIFIC FEATURES (APPEND, not update)
-        feature_vector.extend([
-            profit,
-            abs(current_price - pos.price_open) / pip,
-            max(0, (time.time() - pos.time) / 60),
-            1 if pos.type == mt5.ORDER_TYPE_BUY else 0
-        ])
+        # Exit-specific features — MUST match train_models exit_extras exactly.
+        # ATR for normalization (same formula as training)
+        _atr_s   = (df['high'] - df['low']).rolling(14).mean()
+        exit_atr = float(_atr_s.iloc[-1]) if not pd.isna(_atr_s.iloc[-1]) else float((df['high'] - df['low']).tail(5).mean() or 1e-5)
+
+        # Convert dollar P&L → price-unit move → normalize by ATR
+        contract_size = float(symbol.trade_contract_size) if symbol.trade_contract_size else 100.0
+        price_diff    = (profit / (pos.volume * contract_size)) if pos.volume > 0 else 0.0
+        if pos.type != mt5.ORDER_TYPE_BUY:
+            price_diff = -price_diff  # positive = in-profit direction
+
+        mom_norm  = float(np.clip(price_diff / (exit_atr + 1e-9), -4.0, 4.0))
+        dist_norm = float(np.clip(abs(current_price - pos.price_open) / (exit_atr + 1e-9), 0.0, 4.0))
+        time_mins = float(np.clip((time.time() - pos.time) / 60.0, 0.0, 360.0))
+        side      = 1.0 if pos.type == mt5.ORDER_TYPE_BUY else 0.0
+
+        feature_vector.extend([mom_norm, dist_norm, time_mins, side])
 
         # Validate shape + predict under lock — prevents race with background retrain
         with model_lock:
@@ -2901,15 +2906,23 @@ def train_models(df):
         # ── Scaling + training ────────────────────────────────────────────────
         X = X_df.values
 
-        atr_vals    = atr.loc[X_df.index].values
-        fm_vals     = future_move.loc[X_df.index].values
-        norm_profit = np.clip(fm_vals / (atr_vals + 1e-9), -4.0, 4.0)  
-        dist_vals   = np.abs(fm_vals) / (atr_vals + 1e-9)               
-        time_vals   = np.linspace(0, 1, len(X_df))                      
-        side_vals   = (y_entry.values == 1).astype(float)               
+        atr_vals     = atr.loc[X_df.index].values
 
-        exit_extras   = np.column_stack([norm_profit, dist_vals, time_vals, side_vals])
-        X_exit        = np.hstack([X, exit_extras])
+        # Exit features — MUST match ai_exit_confidence() exactly.
+        # Training uses a 10-bar lagged price change / ATR as a proxy for
+        # "current position P&L / ATR". No future data used here.
+        close_now    = df['close'].loc[X_df.index].values
+        close_lag10  = df['close'].shift(10).loc[X_df.index].values
+        close_lag10  = np.where(np.isnan(close_lag10), close_now, close_lag10)
+
+        momentum     = close_now - close_lag10                                          # price move over last 10 bars
+        mom_norm     = np.clip(momentum / (atr_vals + 1e-9), -4.0, 4.0)               # ATR-normalized (matches inference)
+        dist_norm    = np.clip(np.abs(momentum) / (atr_vals + 1e-9), 0.0, 4.0)       # abs ATR-normalized distance
+        time_mins    = np.clip(np.arange(len(X_df), dtype=float) * 5.0, 0.0, 360.0)  # proxy: bar_index × 5 min/bar
+        side_vals    = (y_entry.values == 1).astype(float)
+
+        exit_extras  = np.column_stack([mom_norm, dist_norm, time_mins, side_vals])
+        X_exit       = np.hstack([X, exit_extras])
 
         # 🔥 THE LOCK MUST GO HERE!
         from sklearn.utils.class_weight import compute_sample_weight
@@ -5118,7 +5131,10 @@ def run():
         mtf_data["trend_score"]   = trend_strength
         for tf_name, tf_df in list(mtf_data.items()):
             if isinstance(tf_df, pd.DataFrame) and len(tf_df) >= 20:
-                mtf_data[f"{tf_name}_trend"] = detect_market_regime(tf_df)
+                if tf_name == "H1":
+                    mtf_data[f"{tf_name}_trend"] = detect_market_regime(tf_df, fast_ema=50, slow_ema=200)
+                else:
+                    mtf_data[f"{tf_name}_trend"] = detect_market_regime(tf_df)
 
     # Fetch live M5 data and pass to initialize_ai so it can train immediately
     # without waiting for the market history file to accumulate
@@ -5260,8 +5276,13 @@ def run():
             # =============================
 
             # 1. Session Filter (London/NY only)
+            if not is_trading_session():
+                if time.time() - last_scan_print > 300:
+                    print("⏰ Outside London/NY session — waiting for market open")
+                    last_scan_print = time.time()
+                time.sleep(60)
+                continue
 
-            
             # 2. Spread Filter
             if spread_too_high():
                 print(f"⚠️ Spread too high: {get_spread()} (max: {MAX_SPREAD})")
