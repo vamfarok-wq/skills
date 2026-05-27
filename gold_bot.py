@@ -4150,7 +4150,7 @@ def manage_open_positions(df, mtf_data, ai_prob):
                 # =============================
                 # SCALE-IN CHECK
                 # =============================
-                if SCALE_IN_ENABLED and profit > 0:
+                if SCALE_IN_ENABLED and profit < 0:
                     scale_level, scale_mult = check_scale_in(pos, current_price, df, ai_prob)
                     if scale_level and scale_mult > 0:
                         scale_vol = round(pos.volume * scale_mult, 2)
