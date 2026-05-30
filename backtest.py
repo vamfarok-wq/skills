@@ -548,6 +548,8 @@ def load_csv_data(path: str) -> pd.DataFrame:
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 
 def main():
+    global TRAIN_BARS, TEST_BARS, STEP_BARS  # must be first use in function
+
     parser = argparse.ArgumentParser(description="Walk-Forward Backtest")
     parser.add_argument("--csv",   type=str, default=None,
                         help="Path to M5 CSV (skip MT5 fetch)")
@@ -561,7 +563,6 @@ def main():
                         help=f"Roll-forward step (default {STEP_BARS})")
     args = parser.parse_args()
 
-    global TRAIN_BARS, TEST_BARS, STEP_BARS
     TRAIN_BARS = args.train
     TEST_BARS  = args.test
     STEP_BARS  = args.step
