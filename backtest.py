@@ -298,12 +298,19 @@ def run_fold(fold_num: int,
     if _BOT_OK:
         try:
             train_models(train_df)
-            print(f"   ✅ Model trained")
+            # train_models() updates scaler_entry/entry_model globals but does NOT
+            # set AI_MODEL=True (that's only done inside initialize_ai()).
+            # Set it here so get_signal_for_bar() doesn't return HOLD immediately.
+            _gb.AI_MODEL = True
+            print(f"   ✅ Model trained  (AI_MODEL=True)")
         except Exception as e:
             print(f"   ⚠️  train_models failed: {e} — fold skipped")
             return []
 
     trades = []
+
+    # Diagnostic counters — printed at end of fold
+    n_short_ctx = n_signal = n_edge_fail = n_veto = n_entry = 0
 
     # ── Bar-by-bar test loop ───────────────────────────────────────────────────
     for bar_i in range(n_test - 1):
@@ -314,6 +321,7 @@ def run_fold(fold_num: int,
         ctx_m5    = full_m5.iloc[ctx_start:ctx_end].reset_index(drop=True)
 
         if len(ctx_m5) < 50:
+            n_short_ctx += 1
             continue
 
         bar_time = ctx_m5["time"].iloc[-1] if "time" in ctx_m5.columns else None
@@ -326,11 +334,17 @@ def run_fold(fold_num: int,
         # Signal
         signal, buy_p, sell_p = get_signal_for_bar(ctx_m5, mtf)
 
+        # Sample first 5 signals to confirm model is producing output
+        if bar_i < 5:
+            print(f"   [bar {bar_i}] raw → buy={buy_p:.3f} sell={sell_p:.3f} signal={signal}")
+
         if signal not in ("BUY", "SELL"):
             continue
+        n_signal += 1
 
         # Edge filter (mirrors should_enter_trade)
         if abs(buy_p - sell_p) < 0.08:
+            n_edge_fail += 1
             continue
 
         # Candle pattern veto
@@ -338,9 +352,12 @@ def run_fold(fold_num: int,
             try:
                 veto, _ = candle_pattern_veto(ctx_m5, signal)
                 if veto:
+                    n_veto += 1
                     continue
             except Exception:
                 pass
+
+        n_entry += 1
 
         # Entry on next bar open
         next_bar = full_m5.iloc[train_end + bar_i + 1]
@@ -389,8 +406,17 @@ def run_fold(fold_num: int,
 
     wins  = sum(1 for t in trades if t["outcome"] == "tp")
     total = len(trades)
-    print(f"   Trades: {total} | Wins: {wins} | "
-          f"Win-rate: {wins/total*100:.1f}%" if total else "   No trades this fold")
+    print(f"   Signal pipeline: {n_test} bars → "
+          f"{n_short_ctx} short-ctx skipped → "
+          f"{n_signal} raw signals → "
+          f"{n_edge_fail} edge-filtered → "
+          f"{n_veto} vetoed → "
+          f"{n_entry} entries attempted → "
+          f"{total} trades")
+    if total:
+        print(f"   Wins: {wins} | Win-rate: {wins/total*100:.1f}%")
+    else:
+        print("   ⚠️  No trades — check signal pipeline above")
 
     return trades
 
