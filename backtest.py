@@ -186,14 +186,21 @@ def get_signal_for_bar(m5_slice: pd.DataFrame, mtf: dict) -> tuple:
         return "HOLD", 0.0, 0.0
 
 
+TP_CAP_ATR  = 3.0   # TP never exceeds entry ± ATR × this; prevents unreachable swing-level targets
+SL_ATR_MULT = 1.0   # default ATR multiplier for SL when structure-based SL is used
+TP_ATR_MULT = 2.0   # default ATR multiplier for TP fallback
+
+
 def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
     Compute SL and TP.
     Tries the real structure-based functions first; falls back to ATR multiples.
+    TP is hard-capped at TP_CAP_ATR × ATR to stay achievable within MAX_HOLD_BARS.
     Returns (sl, tp) both as float prices.
     """
-    pip = GOLD_PIP
+    pip      = GOLD_PIP
+    tp_cap   = atr_val * TP_CAP_ATR   # max TP distance in price units
 
     if _BOT_OK:
         try:
@@ -206,18 +213,23 @@ def compute_sl_tp(direction: str, entry: float,
             tp_ok = tp is not None and abs(entry - tp) > 0
 
             if sl_ok and tp_ok:
-                # Enforce 1.2 RR minimum (mirrors execute_trade)
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
+                # Enforce 1.2 RR minimum
                 if reward / risk < 1.2:
                     tp = (entry + risk * 1.2) if direction == "buy" else (entry - risk * 1.2)
+                # Cap TP so it is reachable within the hold window
+                if direction == "buy":
+                    tp = min(tp, entry + tp_cap)
+                else:
+                    tp = max(tp, entry - tp_cap)
                 return float(sl), float(tp)
         except Exception:
             pass
 
     # ATR fallback
-    sl_dist = max(atr_val * 1.5, SL_MIN_PIPS * pip)
-    tp_dist = sl_dist * 1.5
+    sl_dist = max(atr_val * SL_ATR_MULT, SL_MIN_PIPS * pip)
+    tp_dist = min(sl_dist * (TP_ATR_MULT / SL_ATR_MULT), tp_cap)
     if direction == "buy":
         return entry - sl_dist, entry + tp_dist
     else:
