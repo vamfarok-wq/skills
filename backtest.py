@@ -5,22 +5,23 @@ Walk-Forward Backtest Harness — SMC-AI-GOLD-SENTINEL V40
 Trains on a rolling in-sample window, tests on the next unseen window,
 rolls forward, repeats.  No lookahead bias.
 
+Live filters applied (v2 — realistic simulation):
+  • Session filter  — London 07:00-12:00 UTC, NY 13:00-21:00 UTC only
+  • Entry cooldown  — minimum 2 bars (10 min) between entries
+  • Max positions   — max 2 concurrent simulated positions
+  • No duplicate    — won't open same direction if already in that trade
+  • Concurrent P&L  — open positions are updated every bar, not pre-resolved
+
 Usage
 -----
-    # Fetch live history from MT5 (MT5 terminal must be open)
-    python backtest.py
-
-    # Use a saved CSV instead of MT5
-    python backtest.py --csv data/gold_m5.csv
-
-    # Tune window sizes
+    python backtest.py                         # fetch from MT5
+    python backtest.py --csv data/gold_m5.csv  # offline CSV
     python backtest.py --train 2000 --test 500 --total 12000
 
 Output
 ------
-    backtest_trades.csv   — every simulated trade with entry/exit/pips/R
-    backtest_summary.json — per-fold stats + aggregate metrics
-    Console table         — one line per fold + final summary row
+    backtest_trades.csv   — every simulated trade
+    backtest_summary.json — per-fold + aggregate metrics
 """
 
 import argparse, os, sys, json, warnings, math, time
@@ -72,6 +73,12 @@ RISK_PER_TRADE  = 0.01      # fraction of equity risked per trade
 SL_MIN_PIPS     = 12.0      # min SL (mirrors live bot)
 GOLD_POINT      = 0.01      # XAUUSD point size
 GOLD_PIP        = GOLD_POINT * 10  # 1 pip = $0.10 on 0.01 lot
+
+# ── Live-filter settings (mirror gold_bot.py behaviour) ──────────────────────
+MAX_SIM_POSITIONS = 2       # max concurrent simulated positions
+COOLDOWN_BARS     = 2       # minimum bars between entries (2 × 5 min = 10 min)
+# London: 07:00-12:00 UTC, New York: 13:00-21:00 UTC
+SESSION_HOURS = [(7, 12), (13, 21)]
 
 # ─── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -217,134 +224,166 @@ def compute_sl_tp(direction: str, entry: float,
         return entry + sl_dist, entry - tp_dist
 
 
-def simulate_trade(direction: str, entry_price: float,
-                   sl: float, tp: float,
-                   future_bars: pd.DataFrame) -> dict:
-    """
-    Walk through future_bars bar by bar.
-    For a BUY: win if high >= tp, lose if low <= sl.
-    Returns outcome dict.
-    """
-    for i, (_, bar) in enumerate(future_bars.iterrows()):
-        hit_tp = bar["high"] >= tp if direction == "buy" else bar["low"]  <= tp
-        hit_sl = bar["low"]  <= sl if direction == "buy" else bar["high"] >= sl
+def is_trading_session(bar_time) -> bool:
+    """Return True if bar_time falls inside London or NY session (UTC)."""
+    try:
+        h = pd.Timestamp(bar_time).hour
+        return any(start <= h < end for start, end in SESSION_HOURS)
+    except Exception:
+        return True   # allow if timestamp can't be parsed
 
-        if hit_tp and hit_sl:
-            # Both hit same candle — conservative: count as loss
-            exit_price = sl
-            outcome    = "sl"
-        elif hit_tp:
-            exit_price = tp
-            outcome    = "tp"
-        elif hit_sl:
-            exit_price = sl
-            outcome    = "sl"
-        else:
-            if i == len(future_bars) - 1:
-                exit_price = bar["close"]
-                outcome    = "timeout"
-            else:
-                continue
 
-        risk_pips   = abs(entry_price - sl) / GOLD_PIP
-        reward_pips = abs(tp - entry_price) / GOLD_PIP
-        pnl_pips    = ((exit_price - entry_price) / GOLD_PIP
-                       if direction == "buy"
-                       else (entry_price - exit_price) / GOLD_PIP)
-        pnl_pips   -= SPREAD_PIPS  # subtract spread cost
-
-        return {
-            "outcome":     outcome,
-            "bars_held":   i + 1,
-            "exit_price":  round(exit_price, 2),
-            "pnl_pips":    round(pnl_pips, 2),
-            "risk_pips":   round(risk_pips, 2),
-            "reward_pips": round(reward_pips, 2),
-            "r_multiple":  round(pnl_pips / max(risk_pips, 1e-9), 3),
-        }
-
+def _close_pos(pos: dict, exit_price: float, outcome: str,
+               open_bar: int, close_bar: int, fold_num: int) -> dict:
+    """Build a closed-trade record from a position dict."""
+    is_buy    = pos["direction"] == "buy"
+    pnl_pips  = ((exit_price - pos["entry"]) / GOLD_PIP if is_buy
+                 else (pos["entry"] - exit_price) / GOLD_PIP) - SPREAD_PIPS
+    risk_pips = abs(pos["entry"] - pos["sl"]) / GOLD_PIP
     return {
-        "outcome": "timeout", "bars_held": len(future_bars),
-        "exit_price": future_bars["close"].iloc[-1],
-        "pnl_pips": 0.0, "risk_pips": 0.0, "reward_pips": 0.0, "r_multiple": 0.0,
+        "fold":        fold_num,
+        "time":        pos["open_time"],
+        "direction":   pos["direction"],
+        "entry":       round(pos["entry"], 2),
+        "sl":          round(pos["sl"], 2),
+        "tp":          round(pos["tp"], 2),
+        "buy_prob":    round(pos["buy_prob"], 3),
+        "sell_prob":   round(pos["sell_prob"], 3),
+        "ai_prob":     round(pos["ai_prob"], 3),
+        "atr":         round(pos["atr"], 3),
+        "outcome":     outcome,
+        "bars_held":   close_bar - open_bar,
+        "exit_price":  round(exit_price, 2),
+        "pnl_pips":    round(pnl_pips, 2),
+        "risk_pips":   round(risk_pips, 2),
+        "reward_pips": round(abs(pos["tp"] - pos["entry"]) / GOLD_PIP, 2),
+        "r_multiple":  round(pnl_pips / max(risk_pips, 1e-9), 3),
     }
 
 
 # ─── FOLD ──────────────────────────────────────────────────────────────────────
 
 def run_fold(fold_num: int,
-             full_m5: pd.DataFrame,
-             m15_full: pd.DataFrame,
-             h1_full:  pd.DataFrame,
+             full_m5:    pd.DataFrame,
+             m15_full:   pd.DataFrame,
+             h1_full:    pd.DataFrame,
              train_start: int,
              train_end:   int,
              test_end:    int) -> list:
     """
-    One walk-forward fold.
-    1. Train on full_m5[train_start:train_end]
-    2. Walk bar-by-bar through full_m5[train_end:test_end]
-    3. Return list of trade dicts.
+    One walk-forward fold with realistic live filters.
+
+    Each bar:
+      1. Update all open positions (SL/TP/timeout check)
+      2. If session OK + cooldown OK + room for new position → generate signal
+      3. If good signal → open position at next bar's open
     """
     train_df = full_m5.iloc[train_start:train_end].reset_index(drop=True)
-    test_df  = full_m5.iloc[train_end:test_end].reset_index(drop=True)
-    n_test   = len(test_df)
+    n_test   = test_end - train_end
 
     print(f"\n── Fold {fold_num:02d} | "
-          f"Train [{train_start}:{train_end}] "
-          f"({len(train_df)} bars)  "
+          f"Train [{train_start}:{train_end}] ({len(train_df)} bars)  "
           f"Test [{train_end}:{test_end}] ({n_test} bars) ──")
 
     # ── Train ──────────────────────────────────────────────────────────────────
     if _BOT_OK:
         try:
             train_models(train_df)
-            # train_models() updates scaler_entry/entry_model globals but does NOT
-            # set AI_MODEL=True (that's only done inside initialize_ai()).
-            # Set it here so get_signal_for_bar() doesn't return HOLD immediately.
             _gb.AI_MODEL = True
-            print(f"   ✅ Model trained  (AI_MODEL=True)")
+            print("   ✅ Model trained")
         except Exception as e:
             print(f"   ⚠️  train_models failed: {e} — fold skipped")
             return []
 
-    trades = []
+    closed_trades  = []
+    open_positions = []   # dicts of live simulated positions
+    last_entry_bar = -99  # bar index of last entry (for cooldown)
 
-    # Diagnostic counters — printed at end of fold
-    n_short_ctx = n_signal = n_edge_fail = n_veto = n_entry = 0
+    # Diagnostic counters
+    n_session = n_cooldown = n_maxpos = n_ctx = 0
+    n_signal  = n_edge = n_veto = n_entry = 0
 
-    # ── Bar-by-bar test loop ───────────────────────────────────────────────────
-    for bar_i in range(n_test - 1):
+    for bar_i in range(n_test):
+        abs_idx      = train_end + bar_i
+        current_bar  = full_m5.iloc[abs_idx]
+        bar_time     = (pd.Timestamp(current_bar["time"])
+                        if "time" in current_bar else None)
 
-        # Context window — mirrors live LOOP_BARS=200 logic
-        ctx_start = max(0, train_end - CONTEXT_BARS + bar_i)
-        ctx_end   = train_end + bar_i + 1          # +1 so bar_i is included
-        ctx_m5    = full_m5.iloc[ctx_start:ctx_end].reset_index(drop=True)
+        # ── 1. Update every open position against this bar ──────────────────
+        still_open = []
+        for pos in open_positions:
+            is_buy  = pos["direction"] == "buy"
+            h, l    = float(current_bar["high"]), float(current_bar["low"])
+            hit_tp  = h >= pos["tp"] if is_buy else l <= pos["tp"]
+            hit_sl  = l <= pos["sl"] if is_buy else h >= pos["sl"]
+            elapsed = bar_i - pos["open_bar"]
+            timeout = elapsed >= MAX_HOLD_BARS
 
-        if len(ctx_m5) < 50:
-            n_short_ctx += 1
+            if hit_tp and hit_sl:
+                exit_p, outcome = pos["sl"], "sl"   # both hit → conservative
+            elif hit_tp:
+                exit_p, outcome = pos["tp"], "tp"
+            elif hit_sl:
+                exit_p, outcome = pos["sl"], "sl"
+            elif timeout:
+                exit_p, outcome = float(current_bar["close"]), "timeout"
+            else:
+                still_open.append(pos)
+                continue
+
+            closed_trades.append(
+                _close_pos(pos, exit_p, outcome,
+                           pos["open_bar"], bar_i, fold_num)
+            )
+
+        open_positions = still_open
+
+        # ── 2. Filters before checking for a new entry ──────────────────────
+
+        # Skip last bar — no "next bar" to enter on
+        if bar_i >= n_test - 1:
             continue
 
-        bar_time = ctx_m5["time"].iloc[-1] if "time" in ctx_m5.columns else None
+        # Session filter (London / NY)
+        if bar_time and not is_trading_session(bar_time):
+            n_session += 1
+            continue
 
-        # MTF dict
+        # Entry cooldown
+        if bar_i - last_entry_bar < COOLDOWN_BARS:
+            n_cooldown += 1
+            continue
+
+        # Max concurrent positions
+        if len(open_positions) >= MAX_SIM_POSITIONS:
+            n_maxpos += 1
+            continue
+
+        # ── 3. Build context + generate signal ──────────────────────────────
+        ctx_start = max(0, abs_idx - CONTEXT_BARS + 1)
+        ctx_m5    = full_m5.iloc[ctx_start:abs_idx + 1].reset_index(drop=True)
+
+        if len(ctx_m5) < 50:
+            n_ctx += 1
+            continue
+
         mtf = {}
-        if bar_time is not None and _BOT_OK:
+        if bar_time and _BOT_OK:
             mtf = build_mtf_dict(ctx_m5, m15_full, h1_full, bar_time)
 
-        # Signal
         signal, buy_p, sell_p = get_signal_for_bar(ctx_m5, mtf)
-
-        # Sample first 5 signals to confirm model is producing output
-        if bar_i < 5:
-            print(f"   [bar {bar_i}] raw → buy={buy_p:.3f} sell={sell_p:.3f} signal={signal}")
 
         if signal not in ("BUY", "SELL"):
             continue
         n_signal += 1
 
-        # Edge filter (mirrors should_enter_trade)
+        # Edge filter
         if abs(buy_p - sell_p) < 0.08:
-            n_edge_fail += 1
+            n_edge += 1
+            continue
+
+        # No duplicate direction already open
+        if any(p["direction"] == signal.lower() for p in open_positions):
             continue
 
         # Candle pattern veto
@@ -357,68 +396,53 @@ def run_fold(fold_num: int,
             except Exception:
                 pass
 
-        n_entry += 1
-
-        # Entry on next bar open
-        next_bar = full_m5.iloc[train_end + bar_i + 1]
+        # ── 4. Open position at next bar ────────────────────────────────────
+        next_idx = abs_idx + 1
+        next_bar = full_m5.iloc[next_idx]
         direction = signal.lower()
-        entry_spread = SPREAD_PIPS * GOLD_PIP
-        entry_price  = (next_bar["open"] + entry_spread
-                        if direction == "buy"
-                        else next_bar["open"] - entry_spread)
+        spread    = SPREAD_PIPS * GOLD_PIP
+        entry_p   = (float(next_bar["open"]) + (spread if direction == "buy" else -spread))
+        atr_val   = _atr(ctx_m5)
 
-        # ATR at signal bar
-        atr_val = _atr(ctx_m5)
-
-        # SL / TP
-        sl, tp = compute_sl_tp(direction, entry_price, ctx_m5, atr_val)
-
-        # Validate SL/TP
-        risk_pips = abs(entry_price - sl) / GOLD_PIP
-        if risk_pips < SL_MIN_PIPS:
+        sl, tp = compute_sl_tp(direction, entry_p, ctx_m5, atr_val)
+        if abs(entry_p - sl) / GOLD_PIP < SL_MIN_PIPS:
             continue
 
-        # Future bars for simulation
-        future_start = train_end + bar_i + 1
-        future_end   = min(future_start + MAX_HOLD_BARS, len(full_m5))
-        future_bars  = full_m5.iloc[future_start:future_end].reset_index(drop=True)
-
-        if len(future_bars) == 0:
-            continue
-
-        result = simulate_trade(direction, entry_price, sl, tp, future_bars)
-
-        entry_ts = str(next_bar["time"]) if "time" in next_bar else ""
-
-        trades.append({
-            "fold":        fold_num,
-            "time":        entry_ts,
-            "direction":   direction,
-            "entry":       round(entry_price, 2),
-            "sl":          round(sl, 2),
-            "tp":          round(tp, 2),
-            "buy_prob":    round(buy_p, 3),
-            "sell_prob":   round(sell_p, 3),
-            "ai_prob":     round(max(buy_p, sell_p), 3),
-            "atr":         round(atr_val, 3),
-            **result,
+        n_entry += 1
+        open_positions.append({
+            "direction": direction,
+            "entry":     entry_p,
+            "sl":        sl,
+            "tp":        tp,
+            "open_bar":  bar_i + 1,
+            "open_time": str(next_bar["time"]) if "time" in next_bar else "",
+            "buy_prob":  buy_p,
+            "sell_prob": sell_p,
+            "ai_prob":   max(buy_p, sell_p),
+            "atr":       atr_val,
         })
+        last_entry_bar = bar_i
 
-    wins  = sum(1 for t in trades if t["outcome"] == "tp")
-    total = len(trades)
-    print(f"   Signal pipeline: {n_test} bars → "
-          f"{n_short_ctx} short-ctx skipped → "
-          f"{n_signal} raw signals → "
-          f"{n_edge_fail} edge-filtered → "
-          f"{n_veto} vetoed → "
-          f"{n_entry} entries attempted → "
-          f"{total} trades")
+    # Close anything still open at fold end (mark as fold_end, not a real outcome)
+    last_bar = full_m5.iloc[test_end - 1]
+    for pos in open_positions:
+        closed_trades.append(
+            _close_pos(pos, float(last_bar["close"]), "fold_end",
+                       pos["open_bar"], n_test - 1, fold_num)
+        )
+
+    wins  = sum(1 for t in closed_trades if t["outcome"] == "tp")
+    total = len(closed_trades)
+    print(f"   Filters: session={n_session} cooldown={n_cooldown} "
+          f"maxpos={n_maxpos} short_ctx={n_ctx}")
+    print(f"   Signals: {n_signal} raw → {n_edge} edge → "
+          f"{n_veto} veto → {n_entry} entries → {total} trades")
     if total:
         print(f"   Wins: {wins} | Win-rate: {wins/total*100:.1f}%")
     else:
-        print("   ⚠️  No trades — check signal pipeline above")
+        print("   ⚠️  No trades this fold")
 
-    return trades
+    return closed_trades
 
 
 # ─── METRICS ───────────────────────────────────────────────────────────────────
