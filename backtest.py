@@ -186,20 +186,26 @@ def get_signal_for_bar(m5_slice: pd.DataFrame, mtf: dict) -> tuple:
         return "HOLD", 0.0, 0.0
 
 
-TP_CAP_ATR  = 3.0   # TP never exceeds entry ± ATR × this; prevents unreachable swing-level targets
-SL_ATR_MULT = 1.0   # default ATR multiplier for SL when structure-based SL is used
-TP_ATR_MULT = 2.0   # default ATR multiplier for TP fallback
+SL_CAP_ATR  = 2.0   # SL never wider than entry ± ATR × this (prevents huge stop losses)
+TP_CAP_ATR  = 4.0   # TP never farther than entry ± ATR × this (keeps target reachable)
+SL_ATR_MULT = 1.0   # ATR multiplier for SL fallback
+TP_ATR_MULT = 2.0   # ATR multiplier for TP fallback
+# Guaranteed minimum RR = TP_CAP_ATR / SL_CAP_ATR = 4.0 / 2.0 = 2.0 : 1
 
 
 def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
-    Compute SL and TP.
-    Tries the real structure-based functions first; falls back to ATR multiples.
-    TP is hard-capped at TP_CAP_ATR × ATR to stay achievable within MAX_HOLD_BARS.
+    Compute SL and TP with hard ATR bounds on both sides.
+
+    Structure-based levels are used when available, but both SL and TP are
+    clamped to [SL_MIN_PIPS, SL_CAP_ATR×ATR] and TP_CAP_ATR×ATR respectively.
+    This guarantees RR ≥ TP_CAP_ATR/SL_CAP_ATR on every trade.
+
     Returns (sl, tp) both as float prices.
     """
     pip      = GOLD_PIP
+    sl_cap   = atr_val * SL_CAP_ATR   # max SL distance in price units
     tp_cap   = atr_val * TP_CAP_ATR   # max TP distance in price units
 
     if _BOT_OK:
@@ -213,23 +219,29 @@ def compute_sl_tp(direction: str, entry: float,
             tp_ok = tp is not None and abs(entry - tp) > 0
 
             if sl_ok and tp_ok:
+                # Clamp SL: must be between SL_MIN_PIPS and SL_CAP_ATR×ATR
+                if direction == "buy":
+                    sl = max(sl, entry - sl_cap)   # no wider than cap
+                    sl = min(sl, entry - SL_MIN_PIPS * pip)  # at least min
+                    tp = min(tp, entry + tp_cap)   # no farther than cap
+                else:
+                    sl = min(sl, entry + sl_cap)
+                    sl = max(sl, entry + SL_MIN_PIPS * pip)
+                    tp = max(tp, entry - tp_cap)
+
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
-                # Enforce 1.2 RR minimum
-                if reward / risk < 1.2:
-                    tp = (entry + risk * 1.2) if direction == "buy" else (entry - risk * 1.2)
-                # Cap TP so it is reachable within the hold window
-                if direction == "buy":
-                    tp = min(tp, entry + tp_cap)
-                else:
-                    tp = max(tp, entry - tp_cap)
+                # Enforce 2.0 RR minimum — skip trades where structure gives bad RR
+                if risk == 0 or reward / risk < 2.0:
+                    tp = (entry + risk * 2.0) if direction == "buy" else (entry - risk * 2.0)
                 return float(sl), float(tp)
         except Exception:
             pass
 
-    # ATR fallback
+    # ATR fallback — pure multiples, consistent with optimize.py
     sl_dist = max(atr_val * SL_ATR_MULT, SL_MIN_PIPS * pip)
-    tp_dist = min(sl_dist * (TP_ATR_MULT / SL_ATR_MULT), tp_cap)
+    sl_dist = min(sl_dist, sl_cap)
+    tp_dist = min(sl_dist * (TP_CAP_ATR / SL_ATR_MULT), tp_cap)
     if direction == "buy":
         return entry - sl_dist, entry + tp_dist
     else:
