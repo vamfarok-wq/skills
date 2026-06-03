@@ -353,11 +353,6 @@ def run_fold(fold_num: int,
         if bar_i >= n_test - 1:
             continue
 
-        # Session filter (London / NY)
-        if bar_time and not is_trading_session(bar_time):
-            n_session += 1
-            continue
-
         # Entry cooldown
         if bar_i - last_entry_bar < COOLDOWN_BARS:
             n_cooldown += 1

@@ -2873,21 +2873,8 @@ def train_models(df):
             print("❌ Not enough candles for M5 training (need at least 2000)")
             return
 
-        # Train only on London + NY session bars (07:00–21:00 UTC).
-        # The backtest already filters entries to these hours; training on Asian
-        # session bars teaches patterns that never appear in deployment.
-        if hasattr(df.index, 'hour'):
-            session_mask = df.index.hour.isin(range(7, 21))
-            df = df[session_mask]
-            print(f"📊 Session-filtered training: {len(df)} London/NY bars")
-        else:
-            print(f"📊 Using {len(df)} candles for training (no timestamp index)")
-
-        if len(df) < 500:
-            print("❌ Too few session bars after filtering — skipping training")
-            return
-
         current_candle_count = len(df)
+        print(f"📊 Using {len(df)} candles for training")
 
         # ── Pre-calculate indicators ──────────────────────────────────────────
         # Use 20-bar lookahead for labels — matches production's avg hold of ~8 bars
