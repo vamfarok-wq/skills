@@ -310,7 +310,7 @@ def run_fold(fold_num: int,
 
     # Diagnostic counters
     n_session = n_cooldown = n_maxpos = n_ctx = 0
-    n_signal  = n_edge = n_veto = n_entry = n_equity_skip = 0
+    n_signal  = n_edge = n_veto = n_entry = n_equity_skip = n_confirm = 0
 
     for bar_i in range(n_test):
         abs_idx      = train_end + bar_i
@@ -409,6 +409,31 @@ def run_fold(fold_num: int,
             except Exception:
                 pass
 
+        # Entry confirmation — kill whipsaw entries that reverse immediately.
+        # The signal candle (last closed bar) must close in the trade direction
+        # with a decisive body (≥ 30% of range). Indecision/reversal candles
+        # produce the fast 2-3 bar stop-outs seen in losing folds.
+        sig_bar = full_m5.iloc[abs_idx]
+        s_open  = float(sig_bar["open"])
+        s_close = float(sig_bar["close"])
+        s_high  = float(sig_bar["high"])
+        s_low   = float(sig_bar["low"])
+        s_rng   = s_high - s_low
+        if s_rng <= 0:
+            n_confirm += 1
+            continue
+        body_frac = abs(s_close - s_open) / s_rng
+        bullish_bar = s_close > s_open
+        if body_frac < 0.30:
+            n_confirm += 1
+            continue
+        if signal == "BUY" and not bullish_bar:
+            n_confirm += 1
+            continue
+        if signal == "SELL" and bullish_bar:
+            n_confirm += 1
+            continue
+
         # ── 4. Open position at next bar ────────────────────────────────────
         next_idx = abs_idx + 1
         next_bar = full_m5.iloc[next_idx]
@@ -449,7 +474,7 @@ def run_fold(fold_num: int,
     print(f"   Filters: cooldown={n_cooldown} maxpos={n_maxpos} "
           f"short_ctx={n_ctx} equity_skip={n_equity_skip}")
     print(f"   Signals: {n_signal} raw → {n_edge} edge → "
-          f"{n_veto} veto → {n_entry} entries → {total} trades")
+          f"{n_veto} veto → {n_confirm} unconfirmed → {n_entry} entries → {total} trades")
     if total:
         print(f"   Wins: {wins} | Win-rate: {wins/total*100:.1f}%")
     else:
