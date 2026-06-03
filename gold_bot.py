@@ -2873,20 +2873,35 @@ def train_models(df):
             print("❌ Not enough candles for M5 training (need at least 2000)")
             return
 
+        # Train only on London + NY session bars (07:00–21:00 UTC).
+        # The backtest already filters entries to these hours; training on Asian
+        # session bars teaches patterns that never appear in deployment.
+        if hasattr(df.index, 'hour'):
+            session_mask = df.index.hour.isin(range(7, 21))
+            df = df[session_mask]
+            print(f"📊 Session-filtered training: {len(df)} London/NY bars")
+        else:
+            print(f"📊 Using {len(df)} candles for training (no timestamp index)")
+
+        if len(df) < 500:
+            print("❌ Too few session bars after filtering — skipping training")
+            return
+
         current_candle_count = len(df)
-        print(f"📊 Using {len(df)} candles for training")
 
         # ── Pre-calculate indicators ──────────────────────────────────────────
+        # Use 20-bar lookahead for labels — matches production's avg hold of ~8 bars
+        # but gives price time to reach structural targets (avg_win ~215 pips).
+        LABEL_LOOKAHEAD = 20
         atr         = (df['high'] - df['low']).rolling(14).mean()
-        # shift(-20) = looks 100 minutes ahead (20 M5 candles)
-        future_move = df.close.shift(-12) - df.close
+        future_move = df.close.shift(-LABEL_LOOKAHEAD) - df.close
 
         rows     = []
         indexes  = []
         rr_weights = []  # for sample_weight
 
         # ── Feature generation ────────────────────────────────────────────────
-        for i in tqdm(range(100, len(df) - 12), desc="Generating Features"):
+        for i in tqdm(range(100, len(df) - LABEL_LOOKAHEAD), desc="Generating Features"):
 
             if pd.isna(future_move.iloc[i]) or pd.isna(atr.iloc[i]):
                 continue
@@ -2928,9 +2943,14 @@ def train_models(df):
         X_df = pd.DataFrame(rows, columns=FEATURE_NAMES, index=indexes)
         weights_series = pd.Series(rr_weights, index=indexes)
 
-        # ── Label generation (triple-barrier — no lookahead bias) ────────────
-        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=12,
-                                                           tp_atr=1.5, sl_atr=1.0)
+        # ── Label generation (triple-barrier — aligned with production) ─────
+        # Production avg: win ~215 pips (~3.1×ATR), loss ~95 pips (~1.36×ATR).
+        # Previous labels (tp=1.5, sl=1.0) trained on short targets the model
+        # never sees in live deployment — training/production mismatch.
+        # tp_atr=2.5 / sl_atr=1.5 / lookahead=20 (100 min) better matches what
+        # the model is actually asked to predict in production.
+        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=20,
+                                                           tp_atr=2.5, sl_atr=1.5)
 
         # Exit: shift(-10) = looks 50 minutes ahead
         future_move_exit = df.close.shift(-10) - df.close
