@@ -210,13 +210,13 @@ def regime_allows_trade(regime: str, signal: str) -> tuple:
     Returns (allowed: bool, reason: str).
     Applies strategy-specific rules per regime.
 
-    - Trending regimes: only trade WITH the trend
-    - Ranging regime:   only trade mean-reversion setups (lower AI confidence needed)
-    - Volatile:         block all new entries
-    - Transitional:     require high AI confidence (>= 0.70)
+    - Trending regimes: only trade WITH the trend direction
+    - Ranging regime:   block — bot has no mean-reversion logic, chop = SL hits
+    - Volatile:         block — spike/news trap risk
+    - Transitional:     block — regime changing, wait for confirmation
     """
-    if regime == "volatile":
-        return False, "volatile_regime_block"
+    if regime in ("volatile", "ranging", "transitional"):
+        return False, f"{regime}_block"
 
     if regime == "trending_bull" and signal == "SELL":
         return False, "counter_trend_sell_in_bull"
