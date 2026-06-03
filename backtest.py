@@ -50,6 +50,11 @@ try:
         create_entry_target, MarketStructure,
     )
     import gold_bot as _gb
+    try:
+        from regime_detector import detect_regime, regime_allows_trade
+        _REGIME_OK = True
+    except ImportError:
+        _REGIME_OK = False
     _BOT_OK = True
     print("✅  gold_bot.py loaded — using real SMC signal engine")
 except Exception as _e:
@@ -176,37 +181,39 @@ def get_signal_for_bar(m5_slice: pd.DataFrame, mtf: dict) -> tuple:
             if cls ==  1: buy_p  = float(probs[i])
             if cls == -1: sell_p = float(probs[i])
 
+        # Determine tentative signal direction
         if buy_p >= BUY_THRESHOLD and buy_p > sell_p:
-            return "BUY",  buy_p, sell_p
-        if sell_p >= SELL_THRESHOLD and sell_p > buy_p:
-            return "SELL", buy_p, sell_p
-        return "HOLD", buy_p, sell_p
+            tentative = "BUY"
+        elif sell_p >= SELL_THRESHOLD and sell_p > buy_p:
+            tentative = "SELL"
+        else:
+            return "HOLD", buy_p, sell_p
+
+        # Regime filter — block signals in ranging/unfavourable conditions
+        if _REGIME_OK:
+            try:
+                regime  = detect_regime(m5_slice)
+                allowed, _ = regime_allows_trade(regime, tentative)
+                if not allowed:
+                    return "HOLD", buy_p, sell_p
+            except Exception:
+                pass
+
+        return tentative, buy_p, sell_p
 
     except Exception as e:
         return "HOLD", 0.0, 0.0
 
 
-SL_CAP_ATR  = 2.0   # SL never wider than entry ± ATR × this (prevents huge stop losses)
-TP_CAP_ATR  = 4.0   # TP never farther than entry ± ATR × this (keeps target reachable)
-SL_ATR_MULT = 1.0   # ATR multiplier for SL fallback
-TP_ATR_MULT = 2.0   # ATR multiplier for TP fallback
-# Guaranteed minimum RR = TP_CAP_ATR / SL_CAP_ATR = 4.0 / 2.0 = 2.0 : 1
-
-
 def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
-    Compute SL and TP with hard ATR bounds on both sides.
-
-    Structure-based levels are used when available, but both SL and TP are
-    clamped to [SL_MIN_PIPS, SL_CAP_ATR×ATR] and TP_CAP_ATR×ATR respectively.
-    This guarantees RR ≥ TP_CAP_ATR/SL_CAP_ATR on every trade.
-
+    Compute SL and TP using structure-based levels from gold_bot.py.
+    Falls back to 1.5×ATR SL / 2.25×ATR TP when structure levels are unavailable.
+    Enforces minimum 1.2 RR and minimum SL_MIN_PIPS distance.
     Returns (sl, tp) both as float prices.
     """
-    pip      = GOLD_PIP
-    sl_cap   = atr_val * SL_CAP_ATR   # max SL distance in price units
-    tp_cap   = atr_val * TP_CAP_ATR   # max TP distance in price units
+    pip = GOLD_PIP
 
     if _BOT_OK:
         try:
@@ -219,29 +226,17 @@ def compute_sl_tp(direction: str, entry: float,
             tp_ok = tp is not None and abs(entry - tp) > 0
 
             if sl_ok and tp_ok:
-                # Clamp SL: must be between SL_MIN_PIPS and SL_CAP_ATR×ATR
-                if direction == "buy":
-                    sl = max(sl, entry - sl_cap)   # no wider than cap
-                    sl = min(sl, entry - SL_MIN_PIPS * pip)  # at least min
-                    tp = min(tp, entry + tp_cap)   # no farther than cap
-                else:
-                    sl = min(sl, entry + sl_cap)
-                    sl = max(sl, entry + SL_MIN_PIPS * pip)
-                    tp = max(tp, entry - tp_cap)
-
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
-                # Enforce 2.0 RR minimum — skip trades where structure gives bad RR
-                if risk == 0 or reward / risk < 2.0:
-                    tp = (entry + risk * 2.0) if direction == "buy" else (entry - risk * 2.0)
+                if reward / risk < 1.2:
+                    tp = (entry + risk * 1.2) if direction == "buy" else (entry - risk * 1.2)
                 return float(sl), float(tp)
         except Exception:
             pass
 
-    # ATR fallback — pure multiples, consistent with optimize.py
-    sl_dist = max(atr_val * SL_ATR_MULT, SL_MIN_PIPS * pip)
-    sl_dist = min(sl_dist, sl_cap)
-    tp_dist = min(sl_dist * (TP_CAP_ATR / SL_ATR_MULT), tp_cap)
+    # ATR fallback
+    sl_dist = max(atr_val * 1.5, SL_MIN_PIPS * pip)
+    tp_dist = sl_dist * 1.5
     if direction == "buy":
         return entry - sl_dist, entry + tp_dist
     else:
