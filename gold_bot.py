@@ -33,6 +33,11 @@ from collections import deque
 from tqdm import tqdm
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
+try:
+    import xgboost as xgb
+    _XGB_OK = True
+except ImportError:
+    _XGB_OK = False
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -201,7 +206,16 @@ DAILY_STATS_FILE = os.path.join(DATA_DIR, "daily_stats.json")
 # ================= GLOBAL STATE =================
 
 regime_model = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8, random_state=42)
-entry_model  = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8, random_state=42)
+# XGBoost outperforms GradientBoosting on tabular data — better regularisation,
+# column subsampling, and native handling of class imbalance.
+if _XGB_OK:
+    entry_model = xgb.XGBClassifier(
+        n_estimators=200, max_depth=4, learning_rate=0.05,
+        subsample=0.8, colsample_bytree=0.8,
+        eval_metric='mlogloss', random_state=42, n_jobs=1,
+    )
+else:
+    entry_model = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8, random_state=42)
 exit_model   = GradientBoostingClassifier(n_estimators=200, max_depth=4, learning_rate=0.05, subsample=0.8, random_state=42)
 
 scaler_regime = StandardScaler()
@@ -232,6 +246,11 @@ FEATURE_NAMES = [
     'dist_to_bull_ob', 'dist_to_bear_ob',
     # 5 regime features (Tier-1 upgrade)
     'adx_strength', 'regime_trending', 'regime_ranging', 'regime_volatile', 'di_bull',
+    # 5 temporal + volatility features (Tier-2 upgrade)
+    # Model previously had no sense of time — these let it learn intraday/weekly patterns.
+    'hour_sin', 'hour_cos',      # time-of-day (cyclical, avoids midnight discontinuity)
+    'dow_sin', 'dow_cos',        # day-of-week (cyclical Mon=0 … Fri=4)
+    'vol_percentile',            # current ATR vs last-100-bar ATR distribution (0–1)
 ]
 
 liquidity_heatmap = deque(maxlen=500)
@@ -2448,6 +2467,40 @@ def generate_smc_features(df, mtf_data=None, news_active=False, is_training=Fals
         regime_feats = compute_regime_features(df)
         features.update(regime_feats)
 
+        # ── Temporal + volatility features ───────────────────────────────────
+        try:
+            if isinstance(df.index, pd.DatetimeIndex):
+                ts = df.index[-1]
+            elif 'time' in df.columns:
+                ts = pd.Timestamp(df['time'].iloc[-1])
+            else:
+                ts = None
+
+            if ts is not None:
+                hour = ts.hour + ts.minute / 60.0
+                dow  = float(ts.dayofweek)   # 0=Mon … 4=Fri (6=Sun rarely, gold 24/5)
+                features['hour_sin'] = float(np.sin(2 * np.pi * hour / 24))
+                features['hour_cos'] = float(np.cos(2 * np.pi * hour / 24))
+                features['dow_sin']  = float(np.sin(2 * np.pi * dow  / 5))
+                features['dow_cos']  = float(np.cos(2 * np.pi * dow  / 5))
+            else:
+                features['hour_sin'] = features['hour_cos'] = 0.0
+                features['dow_sin']  = features['dow_cos']  = 0.0
+        except Exception:
+            features['hour_sin'] = features['hour_cos'] = 0.0
+            features['dow_sin']  = features['dow_cos']  = 0.0
+
+        try:
+            atr_hist = (df['high'] - df['low']).rolling(14).mean().dropna()
+            if len(atr_hist) >= 10:
+                features['vol_percentile'] = float(
+                    np.mean(atr_hist.iloc[-100:].values <= curr_atr)
+                )
+            else:
+                features['vol_percentile'] = 0.5
+        except Exception:
+            features['vol_percentile'] = 0.5
+
         return features
 
     except Exception as e:
@@ -2930,14 +2983,9 @@ def train_models(df):
         X_df = pd.DataFrame(rows, columns=FEATURE_NAMES, index=indexes)
         weights_series = pd.Series(rr_weights, index=indexes)
 
-        # ── Label generation (triple-barrier — aligned with production) ─────
-        # Production avg: win ~215 pips (~3.1×ATR), loss ~95 pips (~1.36×ATR).
-        # Previous labels (tp=1.5, sl=1.0) trained on short targets the model
-        # never sees in live deployment — training/production mismatch.
-        # tp_atr=2.5 / sl_atr=1.5 / lookahead=20 (100 min) better matches what
-        # the model is actually asked to predict in production.
-        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=20,
-                                                           tp_atr=2.5, sl_atr=1.5)
+        # ── Label generation (triple-barrier) ───────────────────────────────
+        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=12,
+                                                           tp_atr=1.5, sl_atr=1.0)
 
         # Exit: shift(-10) = looks 50 minutes ahead
         future_move_exit = df.close.shift(-10) - df.close

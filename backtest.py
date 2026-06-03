@@ -310,7 +310,7 @@ def run_fold(fold_num: int,
 
     # Diagnostic counters
     n_session = n_cooldown = n_maxpos = n_ctx = 0
-    n_signal  = n_edge = n_veto = n_entry = 0
+    n_signal  = n_edge = n_veto = n_entry = n_equity_skip = 0
 
     for bar_i in range(n_test):
         abs_idx      = train_end + bar_i
@@ -362,6 +362,15 @@ def run_fold(fold_num: int,
         if len(open_positions) >= MAX_SIM_POSITIONS:
             n_maxpos += 1
             continue
+
+        # Equity curve protection — mirrors live bot's rolling WR discipline.
+        # If last 8 completed trades show WR < 25%, the model is in a bad patch;
+        # skip new entries until the streak improves.
+        if len(closed_trades) >= 8:
+            recent_wr = sum(1 for t in closed_trades[-8:] if t["outcome"] == "tp") / 8
+            if recent_wr < 0.25:
+                n_equity_skip += 1
+                continue
 
         # ── 3. Build context + generate signal ──────────────────────────────
         ctx_start = max(0, abs_idx - CONTEXT_BARS + 1)
@@ -437,8 +446,8 @@ def run_fold(fold_num: int,
 
     wins  = sum(1 for t in closed_trades if t["outcome"] == "tp")
     total = len(closed_trades)
-    print(f"   Filters: session={n_session} cooldown={n_cooldown} "
-          f"maxpos={n_maxpos} short_ctx={n_ctx}")
+    print(f"   Filters: cooldown={n_cooldown} maxpos={n_maxpos} "
+          f"short_ctx={n_ctx} equity_skip={n_equity_skip}")
     print(f"   Signals: {n_signal} raw → {n_edge} edge → "
           f"{n_veto} veto → {n_entry} entries → {total} trades")
     if total:
