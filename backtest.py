@@ -72,7 +72,7 @@ STEP_BARS       = 500       # roll-forward step
 MIN_TOTAL_BARS  = 8000      # minimum history required
 CONTEXT_BARS    = 200       # M5 bars fed to each signal call (mirrors LOOP_BARS)
 SPREAD_PIPS     = 2.5       # simulated spread (Gold M5 ECN typical)
-MAX_HOLD_BARS   = 48        # 48 × 5 min = 4 h max hold
+MAX_HOLD_BARS   = 72        # 72 × 5 min = 6 h max hold
 INITIAL_EQUITY  = 1000.0    # simulated account balance
 RISK_PER_TRADE  = 0.01      # fraction of equity risked per trade
 SL_MIN_PIPS     = 12.0      # min SL (mirrors live bot)
@@ -310,7 +310,7 @@ def run_fold(fold_num: int,
 
     # Diagnostic counters
     n_session = n_cooldown = n_maxpos = n_ctx = 0
-    n_signal  = n_edge = n_veto = n_entry = n_equity_skip = n_confirm = 0
+    n_signal  = n_edge = n_veto = n_entry = n_equity_skip = 0
 
     for bar_i in range(n_test):
         abs_idx      = train_end + bar_i
@@ -372,6 +372,13 @@ def run_fold(fold_num: int,
                 n_equity_skip += 1
                 continue
 
+        # 3-consecutive-SL guard — catches rapid fold-level wipeout streaks
+        # (e.g. fold where every trade hits SL within 2-3 bars).
+        # The 8-trade rolling check can't fire in a small fold; this fires after 3.
+        if len(closed_trades) >= 3 and all(t["outcome"] == "sl" for t in closed_trades[-3:]):
+            n_equity_skip += 1
+            continue
+
         # ── 3. Build context + generate signal ──────────────────────────────
         ctx_start = max(0, abs_idx - CONTEXT_BARS + 1)
         ctx_m5    = full_m5.iloc[ctx_start:abs_idx + 1].reset_index(drop=True)
@@ -408,31 +415,6 @@ def run_fold(fold_num: int,
                     continue
             except Exception:
                 pass
-
-        # Entry confirmation — kill whipsaw entries that reverse immediately.
-        # The signal candle (last closed bar) must close in the trade direction
-        # with a decisive body (≥ 30% of range). Indecision/reversal candles
-        # produce the fast 2-3 bar stop-outs seen in losing folds.
-        sig_bar = full_m5.iloc[abs_idx]
-        s_open  = float(sig_bar["open"])
-        s_close = float(sig_bar["close"])
-        s_high  = float(sig_bar["high"])
-        s_low   = float(sig_bar["low"])
-        s_rng   = s_high - s_low
-        if s_rng <= 0:
-            n_confirm += 1
-            continue
-        body_frac = abs(s_close - s_open) / s_rng
-        bullish_bar = s_close > s_open
-        if body_frac < 0.30:
-            n_confirm += 1
-            continue
-        if signal == "BUY" and not bullish_bar:
-            n_confirm += 1
-            continue
-        if signal == "SELL" and bullish_bar:
-            n_confirm += 1
-            continue
 
         # ── 4. Open position at next bar ────────────────────────────────────
         next_idx = abs_idx + 1
@@ -474,7 +456,7 @@ def run_fold(fold_num: int,
     print(f"   Filters: cooldown={n_cooldown} maxpos={n_maxpos} "
           f"short_ctx={n_ctx} equity_skip={n_equity_skip}")
     print(f"   Signals: {n_signal} raw → {n_edge} edge → "
-          f"{n_veto} veto → {n_confirm} unconfirmed → {n_entry} entries → {total} trades")
+          f"{n_veto} veto → {n_entry} entries → {total} trades")
     if total:
         print(f"   Wins: {wins} | Win-rate: {wins/total*100:.1f}%")
     else:
