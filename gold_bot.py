@@ -35,6 +35,33 @@ from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.preprocessing import StandardScaler
 try:
     import xgboost as xgb
+    from sklearn.preprocessing import LabelEncoder as _LabelEncoder
+
+    class _XGBWrapper:
+        """XGBClassifier that accepts arbitrary class labels (-1, 0, 1).
+
+        XGBoost 3.x requires labels in [0, N-1]. This wrapper remaps them
+        transparently so the rest of the codebase keeps using -1/0/1 labels
+        and the existing classes_-based probability reading stays unchanged.
+        """
+        def __init__(self, **kwargs):
+            self._clf     = xgb.XGBClassifier(**kwargs)
+            self._le      = _LabelEncoder()
+            self.classes_ = None
+
+        def fit(self, X, y, sample_weight=None):
+            y_enc = self._le.fit_transform(y)          # [-1,0,1] → [0,1,2]
+            self._clf.fit(X, y_enc, sample_weight=sample_weight)
+            self.classes_ = self._le.classes_           # restore original labels
+            return self
+
+        def predict_proba(self, X):
+            # Ordering matches self.classes_ (LabelEncoder preserves sort order)
+            return self._clf.predict_proba(X)
+
+        def predict(self, X):
+            return self._le.inverse_transform(self._clf.predict(X))
+
     _XGB_OK = True
 except ImportError:
     _XGB_OK = False
@@ -209,7 +236,7 @@ regime_model = GradientBoostingClassifier(n_estimators=200, max_depth=4, learnin
 # XGBoost outperforms GradientBoosting on tabular data — better regularisation,
 # column subsampling, and native handling of class imbalance.
 if _XGB_OK:
-    entry_model = xgb.XGBClassifier(
+    entry_model = _XGBWrapper(
         n_estimators=200, max_depth=4, learning_rate=0.05,
         subsample=0.8, colsample_bytree=0.8,
         eval_metric='mlogloss', random_state=42, n_jobs=1,
