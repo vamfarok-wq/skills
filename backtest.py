@@ -205,15 +205,20 @@ def get_signal_for_bar(m5_slice: pd.DataFrame, mtf: dict) -> tuple:
         return "HOLD", 0.0, 0.0
 
 
+SL_CAP_ATR = 1.5   # Cap SL at 1.5×ATR — limits loss per trade in trending markets
+
+
 def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
     Compute SL and TP using structure-based levels from gold_bot.py.
+    SL is capped at SL_CAP_ATR × ATR — wider structure-based stops in strong
+    trends were inflating losses. TP is left uncapped to ride trends fully.
     Falls back to 1.5×ATR SL / 2.25×ATR TP when structure levels are unavailable.
-    Enforces minimum 1.2 RR and minimum SL_MIN_PIPS distance.
     Returns (sl, tp) both as float prices.
     """
-    pip = GOLD_PIP
+    pip    = GOLD_PIP
+    sl_cap = atr_val * SL_CAP_ATR
 
     if _BOT_OK:
         try:
@@ -226,6 +231,12 @@ def compute_sl_tp(direction: str, entry: float,
             tp_ok = tp is not None and abs(entry - tp) > 0
 
             if sl_ok and tp_ok:
+                # Cap SL only — keep wide structure-based TPs
+                if direction == "buy":
+                    sl = max(sl, entry - sl_cap)
+                else:
+                    sl = min(sl, entry + sl_cap)
+
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
                 if reward / risk < 1.2:
