@@ -440,15 +440,27 @@ def run_fold(fold_num: int,
             except Exception:
                 pass
 
-        # H1 trend alignment — only trade WITH the dominant H1 direction.
-        # Root cause of 0% WR folds: model predicts SELL in a gold bull market,
-        # 3 trades hit SL immediately, 3-SL guard blocks the remaining 400 bars.
-        # H1 EMA50/200 is already computed in mtf — just enforce it as a hard gate.
+        # Dual-timeframe trend alignment (M15 + H1).
+        #
+        # H1 EMA50/200 is too slow — 200 H1 bars = 8+ days of lag. When price
+        # reverses from an H1 swing high, H1 still reads "bullish" for days
+        # while the bot keeps buying into the drop. M15 (faster EMAs) turns
+        # bearish at the reversal within 30-60 min and acts as the early warning.
+        #
+        # Rules:
+        #   BUY  → blocked if M15 OR H1 is bearish
+        #          (M15 catches H1-top reversals before H1 does)
+        #   SELL → blocked if M15 OR H1 is bullish
+        #          (once M15 turns bearish at the top, SELL becomes allowed)
+        #
+        # This handles the scenario: H1 bullish + M15 bullish → price reaches
+        # H1 resistance → M15 turns bearish → BUY blocked, SELL unblocked.
         if mtf:
-            h1_trend = mtf.get("H1_trend")
-            if h1_trend == "bullish" and signal == "SELL":
+            m15_trend = mtf.get("M15_trend")
+            h1_trend  = mtf.get("H1_trend")
+            if signal == "BUY"  and (m15_trend == "bearish" or h1_trend == "bearish"):
                 continue
-            if h1_trend == "bearish" and signal == "BUY":
+            if signal == "SELL" and (m15_trend == "bullish" or h1_trend == "bullish"):
                 continue
 
         # ── 4. Open position at next bar ────────────────────────────────────
