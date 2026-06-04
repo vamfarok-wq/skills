@@ -424,6 +424,22 @@ def run_fold(fold_num: int,
             except Exception:
                 pass
 
+        # Sweep confirmation — only enter when a liquidity sweep is detected
+        # AND its direction matches the signal. Without a confirmed sweep the
+        # SL placement (last-5-bar extreme) has no structural basis and price
+        # has no reason to reverse at that level.
+        if _BOT_OK:
+            try:
+                sweep = detect_liquidity_sweep(ctx_m5)
+                if sweep is None:
+                    continue
+                if signal == "BUY"  and sweep != "buy_sweep":
+                    continue
+                if signal == "SELL" and sweep != "sell_sweep":
+                    continue
+            except Exception:
+                pass
+
         # ── 4. Open position at next bar ────────────────────────────────────
         next_idx = abs_idx + 1
         next_bar = full_m5.iloc[next_idx]

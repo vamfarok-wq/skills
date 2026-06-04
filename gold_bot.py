@@ -1754,31 +1754,39 @@ def detect_liquidity_pools(df, lookback=60, is_training=False):
         print(f"❌ Liquidity detection error: {e}")
         return pools
 
-def detect_liquidity_sweep(df, lookback=20, min_sweep=0.2):
+def detect_liquidity_sweep(df, lookback=20, min_sweep=0.3):
     """
-    Detects if the last 3 candles swept recent liquidity and rejected.
+    Detects if the last 5 bars swept a recent liquidity level and rejected.
+
+    A valid sweep requires:
+      - Price broke beyond the liquidity wall (recent high/low) by at least
+        min_sweep × ATR — filters noise wicks that barely graze the level
+      - The CLOSE of the last bar is back inside the wall — confirms rejection
+        and a true reversal intent, not a breakout continuation
+
+    Returns "buy_sweep", "sell_sweep", or None.
     """
     try:
-        if len(df) < 30: return None
+        if len(df) < 30:
+            return None
         h, l, c = df["high"].values, df["low"].values, df["close"].values
-        
-        # Find the 'Liquidity Wall'
-        recent_high = h[-(lookback+5):-5].max()
-        recent_low = l[-(lookback+5):-5].min()
-        
-        # Find the 'Sweep Wick'
-        max_high = h[-5:].max()
-        min_low = l[-5:].min()
-        
-        # ATR for minimum sweep distance (avoids noise)
-        atr = (df['high'] - df['low']).rolling(14).mean().iloc[-1]
-        min_dist = atr * 0.2
 
-        # Bullish Sweep (Sell-side Liquidity taken)
+        # Liquidity wall: extremes from the lookback window (excluding last 5 bars)
+        recent_high = h[-(lookback + 5):-5].max()
+        recent_low  = l[-(lookback + 5):-5].min()
+
+        # Sweep wick: extremes of the last 5 bars
+        max_high = h[-5:].max()
+        min_low  = l[-5:].min()
+
+        atr      = float((df['high'] - df['low']).rolling(14).mean().iloc[-1])
+        min_dist = atr * min_sweep   # was hardcoded 0.2, now uses parameter
+
+        # Bullish sweep: wick broke below sell-side liquidity, close recovered above
         if (recent_low - min_low) > min_dist and c[-1] > recent_low:
             return "buy_sweep"
 
-        # Bearish Sweep (Buy-side Liquidity taken)
+        # Bearish sweep: wick broke above buy-side liquidity, close retreated below
         if (max_high - recent_high) > min_dist and c[-1] < recent_high:
             return "sell_sweep"
 
