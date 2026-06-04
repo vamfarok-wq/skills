@@ -440,6 +440,17 @@ def run_fold(fold_num: int,
             except Exception:
                 pass
 
+        # H1 trend alignment — only trade WITH the dominant H1 direction.
+        # Root cause of 0% WR folds: model predicts SELL in a gold bull market,
+        # 3 trades hit SL immediately, 3-SL guard blocks the remaining 400 bars.
+        # H1 EMA50/200 is already computed in mtf — just enforce it as a hard gate.
+        if mtf:
+            h1_trend = mtf.get("H1_trend")
+            if h1_trend == "bullish" and signal == "SELL":
+                continue
+            if h1_trend == "bearish" and signal == "BUY":
+                continue
+
         # ── 4. Open position at next bar ────────────────────────────────────
         next_idx = abs_idx + 1
         next_bar = full_m5.iloc[next_idx]
