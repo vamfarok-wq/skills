@@ -3272,121 +3272,128 @@ def update_trade_result(profit):
 
 def calculate_liquidity_based_sl(direction, entry_price, df, fvgs, obs, atr=None):
     """
-    Calculates SL based on SMC Invalidation (FVG/OB) with Structural Fallbacks.
-    Aligned with optimized get_nearest functions.
+    SL placed just beyond the sweep extreme that triggered the entry.
+
+    After a liquidity sweep the invalidation point is unambiguous: the
+    wick tip that grabbed the stops.  If price sweeps that exact level
+    again the setup is wrong — SL goes just past it.
+
+    BUY  (sell-side swept): SL = min(last 5 bars low)  - ATR*0.15
+    SELL (buy-side swept):  SL = max(last 5 bars high) + ATR*0.15
+
+    Minimum distance clamp: SL is never tighter than 0.8×ATR so it
+    can't get picked off by spread alone.
     """
     try:
-        symbol_info = mt5.symbol_info(SYMBOL)
-        if symbol_info is None: return None
-
-        point = symbol_info.point
-        # Dynamic ATR fallback if not provided
         if atr is None:
-            _atr_series = (df['high'] - df['low']).rolling(14).mean()
-            atr = float(_atr_series.iloc[-1]) if not pd.isna(_atr_series.iloc[-1]) else float((df['high'] - df['low']).tail(5).mean() or 1.0)
+            _s = (df['high'] - df['low']).rolling(14).mean()
+            atr = float(_s.iloc[-1]) if not pd.isna(_s.iloc[-1]) \
+                  else float((df['high'] - df['low']).tail(5).mean() or 1.0)
 
-        # Buffers: 0.15x ATR is usually safer for Gold than fixed pips
-        fvg_buffer = SL_FVG_BUFFER * point * 10 if 'SL_FVG_BUFFER' in globals() else (atr * 0.1)
-        ob_buffer = SL_OB_BUFFER * point * 10 if 'SL_OB_BUFFER' in globals() else (atr * 0.15)
+        buf = atr * 0.15          # small buffer past the wick
+        min_dist = atr * 0.8      # never allow a micro-stop
 
-        sl = None
+        h = df['high'].values
+        l = df['low'].values
 
         if direction.lower() in ["buy", "bullish"]:
-            # 1. SMC Invalidation Points
-            # Corrected arguments: (direction, current_price, features)
-            fvg = get_nearest_fvg("buy", entry_price, fvgs)
-            ob = get_nearest_ob("bullish", entry_price)
-
-            # Check FVG Bottom
-            if fvg:
-                sl = fvg["bottom"] - fvg_buffer
-
-            # Check OB Bottom (Take the deeper one for safety)
-            if ob:
-                ob_sl = ob["bottom"] - ob_buffer
-                sl = ob_sl if sl is None else min(sl, ob_sl)
-
-            # 2. Structural Fallback (Swing Low)
-            if sl is None:
-                sl = df['low'].tail(20).min() - ob_buffer
-
-            # 3. VOLATILITY CLAMP: Ensure SL is at least 0.8x ATR away
-            # This prevents 'micro-stops' that get hunted by spread
-            min_dist = atr * 0.8
-            if (entry_price - sl) < min_dist:
+            sweep_extreme = float(l[-5:].min())
+            sl = sweep_extreme - buf
+            if entry_price - sl < min_dist:
                 sl = entry_price - min_dist
-
-        else:  # SELL / BEARISH
-            fvg = get_nearest_fvg("sell", entry_price, fvgs)
-            ob = get_nearest_ob("bearish", entry_price)
-
-            if fvg:
-                sl = fvg["top"] + fvg_buffer
-
-            if ob:
-                ob_sl = ob["top"] + ob_buffer
-                sl = ob_sl if sl is None else max(sl, ob_sl)
-
-            if sl is None:
-                sl = df['high'].tail(20).max() + ob_buffer
-
-            # Volatility Clamp for Sells
-            min_dist = atr * 0.8
-            if (sl - entry_price) < min_dist:
+        else:
+            sweep_extreme = float(h[-5:].max())
+            sl = sweep_extreme + buf
+            if sl - entry_price < min_dist:
                 sl = entry_price + min_dist
 
-        return round(sl, symbol_info.digits)
+        try:
+            info = mt5.symbol_info(SYMBOL)
+            if info:
+                return round(sl, info.digits)
+        except Exception:
+            pass
+        return round(sl, 2)
 
     except Exception as e:
         print(f"❌ SL calculation error: {e}")
         return None
 
+
 def calculate_liquidity_based_tp(direction, entry_price, df, atr=None):
     """
-    Targets External Liquidity Pools (EQH/EQL) as primary TP.
-    TP is set BEFORE the liquidity level — same principle as SL going
-    beyond a level. Market often reverses just before hitting exact TP.
+    TP placed just before the nearest opposite liquidity level.
+
+    After the entry, price is heading toward the next liquidity pool
+    (swing highs for BUY, swing lows for SELL).  We exit just before
+    that level — 'a bit below the sweep' — so we capture the bulk of
+    the move without being caught in the next reversal when institutions
+    defend/raid that level.
+
+    Algorithm:
+      1. Find swing highs/lows in the last 100 bars via pivot detection.
+      2. Pick the NEAREST one beyond entry_price in the trade direction.
+      3. TP = level - ATR*0.3 (BUY) / level + ATR*0.3 (SELL).
+      4. Fallback: 50-bar extreme with the same buffer.
+      5. Minimum TP distance: 1.5×ATR (avoids trivially close targets).
     """
     try:
-        symbol_info = mt5.symbol_info(SYMBOL)
-        if symbol_info is None: return None
-
         if atr is None:
-            _atr_series = (df['high'] - df['low']).rolling(14).mean()
-            atr = float(_atr_series.iloc[-1]) if not pd.isna(_atr_series.iloc[-1]) else float((df['high'] - df['low']).tail(5).mean() or 1.0)
+            _s = (df['high'] - df['low']).rolling(14).mean()
+            atr = float(_s.iloc[-1]) if not pd.isna(_s.iloc[-1]) \
+                  else float((df['high'] - df['low']).tail(5).mean() or 1.0)
 
-        # Buffer: exit 50% of ATR before the liquidity level
-        # e.g. ATR=$4 → exit $2.00 before TP — gives meaningful clearance
-        # before institutions reverse at the liquidity zone
-        tp_buffer = atr * 1
+        buf      = atr * 0.3    # exit this far before the liquidity level
+        min_dist = atr * 1.5    # TP must be meaningful
+
+        h = df['high'].values
+        l = df['low'].values
+        N = len(h)
+        W = 3                   # pivot window: N candles each side
 
         tp = None
-        pool_dir = "buy" if direction.lower() in ["buy", "bullish"] else "sell"
 
-        # 1. Primary Target: nearest liquidity pool
-        pool = get_nearest_liquidity_level(pool_dir, entry_price, atr=atr)
-        if pool:
-            if pool_dir == "buy":
-                tp = pool["price"] - tp_buffer   # exit BEFORE resistance
+        if direction.lower() in ["buy", "bullish"]:
+            # Nearest pivot HIGH above entry
+            best = float("inf")
+            for k in range(W, N - W):
+                if h[k] > entry_price:
+                    if all(h[k] >= h[k-j] for j in range(1, W+1)) and \
+                       all(h[k] >= h[k+j] for j in range(1, W+1)):
+                        if h[k] < best:
+                            best = h[k]
+            if best < float("inf"):
+                tp = best - buf
             else:
-                tp = pool["price"] + tp_buffer   # exit BEFORE support
+                tp = float(h[-50:].max()) - buf
+
+            if tp - entry_price < min_dist:
+                tp = entry_price + min_dist
+
         else:
-            # 2. Secondary: deep swing point with buffer
-            if pool_dir == "buy":
-                tp = df['high'].tail(50).max() - tp_buffer
+            # Nearest pivot LOW below entry
+            best = float("-inf")
+            for k in range(W, N - W):
+                if l[k] < entry_price:
+                    if all(l[k] <= l[k-j] for j in range(1, W+1)) and \
+                       all(l[k] <= l[k+j] for j in range(1, W+1)):
+                        if l[k] > best:
+                            best = l[k]
+            if best > float("-inf"):
+                tp = best + buf
             else:
-                tp = df['low'].tail(50).min() + tp_buffer
+                tp = float(l[-50:].min()) + buf
 
-        # 3. RR guard: TP must be at least 1.5x ATR away from entry
-        min_tp_dist = atr * 1.5
-        if pool_dir == "buy":
-            if tp <= entry_price or (tp - entry_price) < min_tp_dist:
-                tp = entry_price + min_tp_dist
-        else:
-            if tp >= entry_price or (entry_price - tp) < min_tp_dist:
-                tp = entry_price - min_tp_dist
+            if entry_price - tp < min_dist:
+                tp = entry_price - min_dist
 
-        return round(tp, symbol_info.digits)
+        try:
+            info = mt5.symbol_info(SYMBOL)
+            if info:
+                return round(tp, info.digits)
+        except Exception:
+            pass
+        return round(tp, 2)
 
     except Exception as e:
         print(f"❌ TP calculation error: {e}")

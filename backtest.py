@@ -196,16 +196,20 @@ def get_signal_for_bar(m5_slice: pd.DataFrame, mtf: dict) -> tuple:
 def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
-    Pure structure-based SL and TP — no ATR cap.
-    Enforces a minimum 2:1 RR floor. Breakeven WR at 2:1 is 33%; our base
-    WR runs 35-40%, so every trade above 2:1 is positive expectancy.
-    Below 2:1, the TP is extended to exactly 2.0×risk so we never take a
-    trade where the math doesn't work in our favour.
-    Falls back to 1.5×ATR SL / 3.0×ATR TP when structure is unavailable.
-    Returns (sl, tp) both as float prices.
+    Sweep-based SL/TP — mirrors the live bot's calculate_liquidity_based_sl/tp.
+
+    SL: just past the sweep wick (lowest low / highest high of last 5 bars).
+        If price sweeps that level again the trade thesis is invalidated.
+
+    TP: just before the nearest opposite liquidity level (nearest pivot high
+        for BUY, nearest pivot low for SELL). Exit a bit before the next
+        sweep target — capture the move without being caught in the reversal.
+
+    Minimum RR 2:1 enforced: breakeven WR is 33%, we run 35-40%.
+    Fallback if structure calls fail: 1.5×ATR SL, 3.0×ATR TP.
     """
-    pip = GOLD_PIP
-    MIN_RR = 2.0   # minimum reward:risk — breakeven WR drops to 33%
+    pip    = GOLD_PIP
+    MIN_RR = 2.0
 
     if _BOT_OK:
         try:
@@ -221,12 +225,14 @@ def compute_sl_tp(direction: str, entry: float,
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
                 if reward / risk < MIN_RR:
-                    tp = (entry + risk * MIN_RR) if direction == "buy" else (entry - risk * MIN_RR)
+                    # Extend TP to 2:1 — never shrink SL
+                    tp = (entry + risk * MIN_RR) if direction == "buy" \
+                         else (entry - risk * MIN_RR)
                 return float(sl), float(tp)
         except Exception:
             pass
 
-    # ATR fallback — 1.5×ATR SL, 3.0×ATR TP → guaranteed 2:1
+    # ATR fallback — sweep extreme ~1.5×ATR, TP at 3.0×ATR = 2:1
     sl_dist = max(atr_val * 1.5, SL_MIN_PIPS * pip)
     tp_dist = sl_dist * 2.0
     if direction == "buy":
