@@ -69,7 +69,7 @@ SYMBOL          = "XAUUSD"
 TRAIN_BARS      = 2000      # in-sample candles per fold
 TEST_BARS       = 500       # out-of-sample candles per fold
 STEP_BARS       = 500       # roll-forward step
-MIN_TOTAL_BARS  = 8000      # minimum history required
+MIN_TOTAL_BARS  = 50000     # ~6 months M5; enough folds for reliable aggregate PF
 CONTEXT_BARS    = 200       # M5 bars fed to each signal call (mirrors LOOP_BARS)
 SPREAD_PIPS     = 2.5       # simulated spread (Gold M5 ECN typical)
 MAX_HOLD_BARS   = 72        # 72 × 5 min = 6 h max hold
@@ -197,13 +197,15 @@ def compute_sl_tp(direction: str, entry: float,
                   ctx_df: pd.DataFrame, atr_val: float) -> tuple:
     """
     Pure structure-based SL and TP — no ATR cap.
-    The model's natural RR advantage comes from ranging markets where SL is tight
-    (close to recent swing) and TP is wide (next liquidity level far away).
-    Capping SL destroys that advantage. Let structure decide both levels.
-    Falls back to 1.5×ATR SL / 2.25×ATR TP only when structure is unavailable.
+    Enforces a minimum 2:1 RR floor. Breakeven WR at 2:1 is 33%; our base
+    WR runs 35-40%, so every trade above 2:1 is positive expectancy.
+    Below 2:1, the TP is extended to exactly 2.0×risk so we never take a
+    trade where the math doesn't work in our favour.
+    Falls back to 1.5×ATR SL / 3.0×ATR TP when structure is unavailable.
     Returns (sl, tp) both as float prices.
     """
     pip = GOLD_PIP
+    MIN_RR = 2.0   # minimum reward:risk — breakeven WR drops to 33%
 
     if _BOT_OK:
         try:
@@ -218,15 +220,15 @@ def compute_sl_tp(direction: str, entry: float,
             if sl_ok and tp_ok:
                 risk   = abs(entry - sl)
                 reward = abs(tp - entry)
-                if reward / risk < 1.2:
-                    tp = (entry + risk * 1.2) if direction == "buy" else (entry - risk * 1.2)
+                if reward / risk < MIN_RR:
+                    tp = (entry + risk * MIN_RR) if direction == "buy" else (entry - risk * MIN_RR)
                 return float(sl), float(tp)
         except Exception:
             pass
 
-    # ATR fallback
+    # ATR fallback — 1.5×ATR SL, 3.0×ATR TP → guaranteed 2:1
     sl_dist = max(atr_val * 1.5, SL_MIN_PIPS * pip)
-    tp_dist = sl_dist * 1.5
+    tp_dist = sl_dist * 2.0
     if direction == "buy":
         return entry - sl_dist, entry + tp_dist
     else:

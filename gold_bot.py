@@ -3011,8 +3011,12 @@ def train_models(df):
         weights_series = pd.Series(rr_weights, index=indexes)
 
         # ── Label generation (triple-barrier) ───────────────────────────────
-        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=12,
-                                                           tp_atr=1.5, sl_atr=1.0)
+        # Labels aligned with live execution: require 2:1 RR within 24 bars (2h).
+        # Previous tp_atr=1.5/lookahead=12 taught the model to fire on 60-min
+        # momentum setups, but execution was extended to 72-bar holds with 2:1 floor.
+        # This alignment means model fires only when structure supports a 2×ATR move.
+        y_entry_all, tb_weights_all = create_entry_target(df, lookahead=24,
+                                                           tp_atr=2.0, sl_atr=1.0)
 
         # Exit: shift(-10) = looks 50 minutes ahead
         future_move_exit = df.close.shift(-10) - df.close
