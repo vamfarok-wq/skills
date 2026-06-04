@@ -3291,7 +3291,7 @@ def calculate_liquidity_based_sl(direction, entry_price, df, fvgs, obs, atr=None
                   else float((df['high'] - df['low']).tail(5).mean() or 1.0)
 
         buf = atr * 0.15          # small buffer past the wick
-        min_dist = atr * 0.8      # never allow a micro-stop
+        min_dist = atr * 0.6      # clamp: prevent micro-stops without overriding clean structure
 
         h = df['high'].values
         l = df['low'].values
