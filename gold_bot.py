@@ -2872,17 +2872,38 @@ def ai_exit_confidence(df, pos, current_price, profit):
 def create_entry_target(df: pd.DataFrame,
                         lookahead: int = 12,
                         tp_atr: float = 1.5,
-                        sl_atr: float = 1.0) -> tuple:
+                        sl_atr: float = 1.0,
+                        detrend_span: int = 100) -> tuple:
     """
-    Triple-barrier labeling (replaces the old FixedForwardWindow approach).
+    Triple-barrier labeling — DETRENDED so the model learns DIRECTION, not drift.
 
-    For each bar i, three barriers are set:
-        Upper barrier  = close[i] + tp_atr  × ATR[i]   → label  1 (buy winner)
-        Lower barrier  = close[i] - sl_atr  × ATR[i]   → label -1 (sell winner)
-        Time barrier   = bar i + lookahead               → label  0 (unclear)
+    THE BUG THIS FIXES
+    ------------------
+    The old version raced the barriers on RAW price:
+        Upper = close[i] + tp_atr×ATR  → label  1 (buy winner)
+        Lower = close[i] - sl_atr×ATR  → label -1 (sell winner)
+    Gold spent the training window in a secular uptrend. On raw price the
+    upper barrier wins most races simply because price drifts up — so the
+    MAJORITY of bars get labeled BUY, INCLUDING bars with bearish structure
+    (bearish FVG / bearish CHoCH) that the uptrend happened to bail out.
+    The model faithfully learned "bearish_fvg → price bounces → BUY". That was
+    TRUE in the bull market, which is exactly why the AI now prints Buy:0.66 in
+    a clearly bearish tape: it memorized a regime that has flipped.
+    class_weight='balanced' can't fix this — it balances label COUNTS, not the
+    corrupted feature→label mapping.
 
-    Walk bar-by-bar (no lookahead bias) to find WHICH barrier hits first.
-    If both barriers hit on the same candle → label 0 (trap / chop).
+    THE FIX
+    -------
+    Subtract the secular trend (a slow EMA) from price, then race SYMMETRIC
+    barriers on the *residual*. Now the label answers "did this bar out- or
+    under-perform its own trend?" — a bearish setup that merely fails to keep up
+    with the drift correctly hits the lower barrier → labeled SELL. The model
+    can finally associate bearish structure with SELL.
+
+    For each bar i (on detrended series r = price − EMA(price)):
+        Upper = r[i] + tp_atr × ATR[i]  → label  1   (out-performs trend = BUY)
+        Lower = r[i] - sl_atr × ATR[i]  → label -1   (under-performs trend = SELL)
+        Time barrier at i+lookahead     → label  0   (unclear / chop)
 
     Returns
     -------
@@ -2893,6 +2914,15 @@ def create_entry_target(df: pd.DataFrame,
     high   = df['high'].values
     low    = df['low'].values
     n      = len(df)
+
+    # ── Detrend: strip the secular drift so up/down are balanced around trend ──
+    # EMA of close is the "fair value" path; residual = how far price sits above
+    # or below its own trend. Racing barriers on the residual removes the
+    # bull-market BUY bias entirely.
+    ema    = pd.Series(close).ewm(span=detrend_span, adjust=False).mean().values
+    r_close = close - ema
+    r_high  = high  - ema    # candle extremes relative to the same trend baseline
+    r_low   = low   - ema
 
     prev_close = np.roll(close, 1)
     prev_close[0] = close[0]
@@ -2911,14 +2941,15 @@ def create_entry_target(df: pd.DataFrame,
         if np.isnan(atr[i]) or atr[i] <= 0:
             continue
 
-        upper = close[i] + tp_atr * atr[i]
-        lower = close[i] - sl_atr * atr[i]
+        # Barriers set on the DETRENDED residual (price minus its EMA trend).
+        upper = r_close[i] + tp_atr * atr[i]
+        lower = r_close[i] - sl_atr * atr[i]
         hit   = 0
         bars  = lookahead
 
         for j in range(i + 1, min(i + lookahead + 1, n)):
-            hit_up = high[j] >= upper
-            hit_dn = low[j]  <= lower
+            hit_up = r_high[j] >= upper
+            hit_dn = r_low[j]  <= lower
             if hit_up and hit_dn:
                 hit  = 0    # both hit same candle — trap / indecision
                 bars = j - i
@@ -3023,8 +3054,12 @@ def train_models(df):
         # Previous tp_atr=1.5/lookahead=12 taught the model to fire on 60-min
         # momentum setups, but execution was extended to 72-bar holds with 2:1 floor.
         # This alignment means model fires only when structure supports a 2×ATR move.
+        # Symmetric barriers (tp == sl) on the DETRENDED series: neither the
+        # geometry nor the secular drift can pre-load a BUY bias now. The model
+        # learns direction purely from structure.
         y_entry_all, tb_weights_all = create_entry_target(df, lookahead=24,
-                                                           tp_atr=2.0, sl_atr=1.0)
+                                                           tp_atr=1.5, sl_atr=1.5,
+                                                           detrend_span=100)
 
         # Exit: shift(-10) = looks 50 minutes ahead
         future_move_exit = df.close.shift(-10) - df.close
