@@ -76,6 +76,7 @@ MAX_HOLD_BARS   = 72        # 72 × 5 min = 6 h max hold
 INITIAL_EQUITY  = 1000.0    # simulated account balance
 RISK_PER_TRADE  = 0.01      # fraction of equity risked per trade
 SL_MIN_PIPS     = 12.0      # min SL (mirrors live bot)
+SL_MAX_PIPS     = 120.0     # skip if structural SL wider — news-spike sweep, unreliable
 GOLD_POINT      = 0.01      # XAUUSD point size
 GOLD_PIP        = GOLD_POINT * 10  # 1 pip = $0.10 on 0.01 lot
 
@@ -472,10 +473,13 @@ def run_fold(fold_num: int,
         atr_val   = _atr(ctx_m5)
 
         sl, tp = compute_sl_tp(direction, entry_p, ctx_m5, atr_val)
-        if abs(entry_p - sl) / GOLD_PIP < SL_MIN_PIPS:
+        sl_dist_pips = abs(entry_p - sl) / GOLD_PIP
+        if sl_dist_pips < SL_MIN_PIPS:
             continue
-        # Skip news-spike sweeps where structural SL is abnormally wide
-        if abs(entry_p - sl) > atr_val * 3.0:
+        # Skip news-spike sweeps where structural SL is abnormally wide.
+        # Relative cap (3×ATR) catches outliers vs current vol; absolute cap
+        # (SL_MAX_PIPS) catches news spikes where ATR itself is inflated.
+        if abs(entry_p - sl) > atr_val * 3.0 or sl_dist_pips > SL_MAX_PIPS:
             continue
 
         n_entry += 1
