@@ -4556,64 +4556,78 @@ def should_enter_trade(df, mtf_data, news_active):
                   f"bull_conf={features.get('bullish_confluence',0):.1f} bear_conf={features.get('bearish_confluence',0):.1f} "
                   f"bias={features.get('net_bias',0):.1f}")
 
-        # ── Live momentum gate ───────────────────────────────────────────────
-        # XGBoost is trained on historical bars — it cannot see that price is
-        # actively crashing/surging RIGHT NOW. It returns a historical bias
-        # (usually BUY in a gold bull market) regardless. This gate checks the
-        # last 5 M5 bars directly: if net move > 1.5×ATR against the signal,
-        # the candle situation overrides the AI output entirely.
-        _df_c = df["close"].values
-        _df_o = df["open"].values
+        # ── Step 1: Sweep sets direction (AI cannot decide direction) ───────────
+        # The AI has a structural BUY bias trained on a gold bull market.
+        # It can see the live candle but it pattern-matches it to past dips-
+        # that-bounced, so it always leans BUY. The liquidity sweep is the
+        # real structural trigger — price swept a level and is reversing.
+        # Direction comes from the sweep; AI only confirms quality.
+        sweep_direction = detect_liquidity_sweep(df)  # "buy_sweep" / "sell_sweep" / None
+        if sweep_direction is None:
+            return "WAIT", "no_sweep", 0.0, ms_data, buy_prob, sell_prob
+
+        # ── Step 2: Live momentum gate ───────────────────────────────────────
+        # If price is in active freefall/surge (net > 1.5×ATR in 5 bars)
+        # against the sweep direction, the sweep is a continuation move,
+        # not a reversal — skip.
         _atr_live = float((df["high"] - df["low"]).rolling(14).mean().iloc[-1])
-        _net5_live = float(_df_c[-1] - _df_o[-5])
-        if buy_prob > sell_prob and _net5_live < -_atr_live * 1.5:
+        _net5_live = float(df["close"].values[-1] - df["open"].values[-5])
+        if sweep_direction == "buy_sweep"  and _net5_live < -_atr_live * 1.5:
             return "WAIT", "momentum_crash", buy_prob, ms_data, buy_prob, sell_prob
-        if sell_prob > buy_prob and _net5_live >  _atr_live * 1.5:
+        if sweep_direction == "sell_sweep" and _net5_live >  _atr_live * 1.5:
             return "WAIT", "momentum_surge", sell_prob, ms_data, buy_prob, sell_prob
 
+        # ── Step 3: AI must not strongly oppose the sweep direction ──────────
+        # AI no longer decides direction, but if its probability for the sweep
+        # direction is < 0.25 the setup is structurally very weak — skip.
+        if sweep_direction == "buy_sweep"  and buy_prob  < 0.25:
+            return "WAIT", "ai_weak_buy", buy_prob, ms_data, buy_prob, sell_prob
+        if sweep_direction == "sell_sweep" and sell_prob < 0.25:
+            return "WAIT", "ai_weak_sell", sell_prob, ms_data, buy_prob, sell_prob
+
+        # ── Map sweep → signal (sweep owns direction, not AI) ────────────────
+        signal = "BUY" if sweep_direction == "buy_sweep" else "SELL"
+
         # =========================
-        # BUY SIDE
+        # BUY SIDE (sweep = buy_sweep)
         # =========================
-        if buy_prob > sell_prob:
+        if signal == "BUY":
 
             # ── M5 PRIMARY GATE ────────────────────────────────────────
             if m5_trend not in ["bullish", "range", None]:
-                return "WAIT", "trend_mismatch", ai_prob, ms_data, buy_prob, sell_prob
+                return "WAIT", "trend_mismatch", buy_prob, ms_data, buy_prob, sell_prob
 
-            # ── M15 CONFIRMATION ───────────────────────────────────────            
+            # ── M15 CONFIRMATION ───────────────────────────────────────
             if m15_trend == "bearish":
-                if not (ai_prob >= 0.78 and h1_trend == "bullish"):
-                    return "WAIT", "m15_conflict", ai_prob, ms_data, buy_prob, sell_prob
+                if not (buy_prob >= 0.78 and h1_trend == "bullish"):
+                    return "WAIT", "m15_conflict", buy_prob, ms_data, buy_prob, sell_prob
 
-            # ── 🔥 SMC REVERSAL — always fires if M5+M15 passed ───────
+            # ── SMC REVERSAL — fires if M5+M15 passed ─────────────────
             if features.get("bullish_reversal_setup", 0) == 1:
-                return "BUY", "smc_reversal", ai_prob, ms_data, buy_prob, sell_prob
+                return "BUY", "smc_reversal", buy_prob, ms_data, buy_prob, sell_prob
 
             # ── CONFLUENCE ENTRY ───────────────────────────────────────
-            min_conf = 1.5 if ai_prob > 0.72 else 2.5
-            if features.get("bullish_confluence", 0) >= min_conf and ai_prob > 0.55:
-                return "BUY", "confluence_entry", ai_prob, ms_data, buy_prob, sell_prob
+            min_conf = 1.5 if buy_prob > 0.50 else 2.5
+            if features.get("bullish_confluence", 0) >= min_conf:
+                return "BUY", "confluence_entry", buy_prob, ms_data, buy_prob, sell_prob
 
             # ── CHoCH ENTRY ────────────────────────────────────────────
-            # Threshold raised 0.55 → 0.65 based on trade data analysis:
-            # 6 trades in 0.55-0.60 band = 0% WR, -$154 loss
-            # CHoCH is a reversal pattern — needs higher AI conviction than confluence.
-            if features.get("choch_bull", 0) == 1.0 and ai_prob > 0.65:
-                return "BUY", "choch_reversal", ai_prob, ms_data, buy_prob, sell_prob
+            if features.get("choch_bull", 0) == 1.0:
+                return "BUY", "choch_reversal", buy_prob, ms_data, buy_prob, sell_prob
 
             # ── MOMENTUM ENTRY ─────────────────────────────────────────
-            min_bias = 0.8 if ai_prob > 0.72 else 1.5
-            if features.get("net_bias", 0) > min_bias and ai_prob > 0.60:
-                return "BUY", "momentum_bias", ai_prob, ms_data, buy_prob, sell_prob
+            min_bias = 0.8 if buy_prob > 0.50 else 1.5
+            if features.get("net_bias", 0) > min_bias:
+                return "BUY", "momentum_bias", buy_prob, ms_data, buy_prob, sell_prob
 
             # ── MTF ALIGNMENT ──────────────────────────────────────────
-            if m5_trend == "bullish" and m15_trend == "bullish" and ai_prob > 0.72:
-                return "BUY", "mtf_alignment", ai_prob, ms_data, buy_prob, sell_prob
+            if m5_trend == "bullish" and m15_trend == "bullish":
+                return "BUY", "mtf_alignment", buy_prob, ms_data, buy_prob, sell_prob
 
         # =========================
-        # SELL SIDE
+        # SELL SIDE (sweep = sell_sweep)
         # =========================
-        elif sell_prob > buy_prob:
+        elif signal == "SELL":
 
             # ── M5 PRIMARY GATE ────────────────────────────────────────
             if m5_trend not in ["bearish", "range", None]:
@@ -4621,36 +4635,35 @@ def should_enter_trade(df, mtf_data, news_active):
 
             # ── M15 CONFIRMATION ───────────────────────────────────────
             if m15_trend == "bullish":
-                if not (ai_prob >= 0.78 and h1_trend == "bearish"):
+                if not (sell_prob >= 0.78 and h1_trend == "bearish"):
                     return "WAIT", "m15_conflict", sell_prob, ms_data, buy_prob, sell_prob
 
-            # ── 🔥 SMC REVERSAL ────────────────────────────────────────
+            # ── SMC REVERSAL ───────────────────────────────────────────
             if features.get("bearish_reversal_setup", 0) == 1:
-                return "SELL", "smc_reversal", ai_prob, ms_data, buy_prob, sell_prob
+                return "SELL", "smc_reversal", sell_prob, ms_data, buy_prob, sell_prob
 
             # ── CONFLUENCE ENTRY ───────────────────────────────────────
-            min_conf = 1.5 if ai_prob > 0.72 else 2.5
-            if features.get("bearish_confluence", 0) >= min_conf and ai_prob > 0.55:
-                return "SELL", "confluence_entry", ai_prob, ms_data, buy_prob, sell_prob
+            min_conf = 1.5 if sell_prob > 0.50 else 2.5
+            if features.get("bearish_confluence", 0) >= min_conf:
+                return "SELL", "confluence_entry", sell_prob, ms_data, buy_prob, sell_prob
 
             # ── CHoCH ENTRY ────────────────────────────────────────────
-            # Threshold raised 0.55 → 0.65 (mirror of BUY side — same reasoning)
-            if features.get("choch_bear", 0) == 1.0 and ai_prob > 0.65:
-                return "SELL", "choch_reversal", ai_prob, ms_data, buy_prob, sell_prob
+            if features.get("choch_bear", 0) == 1.0:
+                return "SELL", "choch_reversal", sell_prob, ms_data, buy_prob, sell_prob
 
             # ── MOMENTUM ENTRY ─────────────────────────────────────────
-            min_bias = 0.8 if ai_prob > 0.72 else 1.5
-            if features.get("net_bias", 0) < -min_bias and ai_prob > 0.60:
-                return "SELL", "momentum_bias", ai_prob, ms_data, buy_prob, sell_prob
+            min_bias = 0.8 if sell_prob > 0.50 else 1.5
+            if features.get("net_bias", 0) < -min_bias:
+                return "SELL", "momentum_bias", sell_prob, ms_data, buy_prob, sell_prob
 
             # ── MTF ALIGNMENT ──────────────────────────────────────────
-            if m5_trend == "bearish" and m15_trend == "bearish" and ai_prob > 0.72:
-                return "SELL", "mtf_alignment", ai_prob, ms_data, buy_prob, sell_prob
+            if m5_trend == "bearish" and m15_trend == "bearish":
+                return "SELL", "mtf_alignment", sell_prob, ms_data, buy_prob, sell_prob
 
         # =========================
         # DEFAULT
         # =========================
-        return "WAIT", "no_confluence", ai_prob, ms_data, buy_prob, sell_prob
+        return "WAIT", "no_confluence", 0.0, ms_data, buy_prob, sell_prob
 
 
     except Exception as e:

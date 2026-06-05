@@ -402,44 +402,42 @@ def run_fold(fold_num: int,
 
         signal, buy_p, sell_p = get_signal_for_bar(ctx_m5, mtf)
 
-        if signal not in ("BUY", "SELL"):
-            continue
-        n_signal += 1
-
-        # Edge filter
-        if abs(buy_p - sell_p) < 0.08:
-            n_edge += 1
-            continue
-
-        # No duplicate direction already open
-        if any(p["direction"] == signal.lower() for p in open_positions):
-            continue
-
-        # Candle pattern veto
-        if _BOT_OK:
-            try:
-                veto, _ = candle_pattern_veto(ctx_m5, signal)
-                if veto:
-                    n_veto += 1
-                    continue
-            except Exception:
-                pass
-
-        # Sweep confirmation — only enter when a liquidity sweep is detected
-        # AND its direction matches the signal. Without a confirmed sweep the
-        # SL placement (last-5-bar extreme) has no structural basis and price
-        # has no reason to reverse at that level.
+        # ── Step A: Sweep decides direction ─────────────────────────────────
+        # The AI has a trained BUY bias (gold bull market training data) and
+        # cannot resolve the current regime from its feature set alone.
+        # The liquidity sweep IS the structural event that justifies a reversal
+        # entry — so it sets direction, not the AI.
+        sweep_dir = None
         if _BOT_OK:
             try:
                 sweep = detect_liquidity_sweep(ctx_m5)
-                if sweep is None:
-                    continue
-                if signal == "BUY"  and sweep != "buy_sweep":
-                    continue
-                if signal == "SELL" and sweep != "sell_sweep":
-                    continue
+                if sweep == "buy_sweep":
+                    sweep_dir = "BUY"
+                elif sweep == "sell_sweep":
+                    sweep_dir = "SELL"
             except Exception:
                 pass
+
+        if sweep_dir is None:
+            continue   # no sweep → no structural entry basis
+
+        # ── Step B: AI must not strongly oppose the sweep direction ─────────
+        # AI doesn't decide direction anymore — but if it's confidently wrong
+        # (e.g. buy_p < 0.25 for a BUY sweep) the setup is structurally weak.
+        # Require AI's probability for the sweep direction ≥ 0.25.
+        ai_min = 0.25
+        if sweep_dir == "BUY"  and buy_p  < ai_min:
+            continue
+        if sweep_dir == "SELL" and sell_p < ai_min:
+            continue
+
+        signal   = sweep_dir
+        n_signal += 1
+
+        # Edge filter — still useful to skip coin-flip AI outputs
+        if abs(buy_p - sell_p) < 0.08:
+            n_edge += 1
+            continue
 
         # Dual-timeframe trend alignment (M15 + H1).
         #
