@@ -474,6 +474,9 @@ def run_fold(fold_num: int,
         sl, tp = compute_sl_tp(direction, entry_p, ctx_m5, atr_val)
         if abs(entry_p - sl) / GOLD_PIP < SL_MIN_PIPS:
             continue
+        # Skip news-spike sweeps where structural SL is abnormally wide
+        if abs(entry_p - sl) > atr_val * 3.0:
+            continue
 
         n_entry += 1
         open_positions.append({
