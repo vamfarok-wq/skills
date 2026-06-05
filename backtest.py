@@ -464,6 +464,22 @@ def run_fold(fold_num: int,
             if signal == "SELL" and (m15_trend == "bullish" or h1_trend == "bullish"):
                 continue
 
+        # ── Live momentum gate ───────────────────────────────────────────────
+        # The AI is blind to *current* candle momentum — it sees historical
+        # feature vectors and returns the trained bias (usually BUY in a bull
+        # market). When price is actively crashing / surging, the M15/H1 filter
+        # may not have flipped yet (30-60 min lag). This gate checks the last
+        # 5 M5 bars directly: if net move > 1.5×ATR against the signal, skip.
+        # This is the "eyes and brain" the AI lacks.
+        _c = ctx_m5["close"].values
+        _o = ctx_m5["open"].values
+        _atr5 = float((ctx_m5["high"] - ctx_m5["low"]).rolling(14).mean().iloc[-1])
+        _net5 = _c[-1] - _o[-5]  # net price move over last 5 bars
+        if signal == "BUY"  and _net5 < -_atr5 * 1.5:
+            continue
+        if signal == "SELL" and _net5 >  _atr5 * 1.5:
+            continue
+
         # ── 4. Open position at next bar ────────────────────────────────────
         next_idx = abs_idx + 1
         next_bar = full_m5.iloc[next_idx]

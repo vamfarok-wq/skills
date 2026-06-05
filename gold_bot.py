@@ -4556,6 +4556,21 @@ def should_enter_trade(df, mtf_data, news_active):
                   f"bull_conf={features.get('bullish_confluence',0):.1f} bear_conf={features.get('bearish_confluence',0):.1f} "
                   f"bias={features.get('net_bias',0):.1f}")
 
+        # ── Live momentum gate ───────────────────────────────────────────────
+        # XGBoost is trained on historical bars — it cannot see that price is
+        # actively crashing/surging RIGHT NOW. It returns a historical bias
+        # (usually BUY in a gold bull market) regardless. This gate checks the
+        # last 5 M5 bars directly: if net move > 1.5×ATR against the signal,
+        # the candle situation overrides the AI output entirely.
+        _df_c = df["close"].values
+        _df_o = df["open"].values
+        _atr_live = float((df["high"] - df["low"]).rolling(14).mean().iloc[-1])
+        _net5_live = float(_df_c[-1] - _df_o[-5])
+        if buy_prob > sell_prob and _net5_live < -_atr_live * 1.5:
+            return "WAIT", "momentum_crash", buy_prob, ms_data, buy_prob, sell_prob
+        if sell_prob > buy_prob and _net5_live >  _atr_live * 1.5:
+            return "WAIT", "momentum_surge", sell_prob, ms_data, buy_prob, sell_prob
+
         # =========================
         # BUY SIDE
         # =========================
