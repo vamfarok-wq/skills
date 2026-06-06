@@ -90,15 +90,13 @@ def chain_decision(ctx, mtf, buy_p, sell_p):
 
     ai_prob = max(buy_p, sell_p)
 
-    # ── hard edge filter ──
-    if abs(buy_p - sell_p) < 0.08:
+    # ── edge filter: balanced model has compressed probabilities → 0.05 gap ──
+    if abs(buy_p - sell_p) < 0.05:
         return None, 'no_edge'
 
-    # ── weak AI filter ──
-    if buy_p > sell_p and buy_p < 0.55:
-        return None, 'weak_ai'
-    if sell_p > buy_p and sell_p < 0.45:
-        return None, 'weak_ai'
+    # NOTE: no weak_ai gate — balanced model probabilities sit closer to 0.5,
+    # old 0.55/0.45 thresholds were calibrated for the biased model. SMC
+    # signals + trend gates are the structural edge; AI just needs to lean.
 
     m5t  = v55.detect_market_regime(ctx)
     m15t = mtf['M15_trend']
@@ -109,21 +107,21 @@ def chain_decision(ctx, mtf, buy_p, sell_p):
         if m5t not in ['bullish', 'range', None]:
             return None, 'trend_mismatch'
         if m15t == 'bearish':
-            if not (ai_prob >= 0.78 and h1t == 'bullish'):
+            if not (ai_prob >= 0.60 and h1t == 'bullish'):
                 return None, 'm15_conflict'
 
         if feats.get('bullish_reversal_setup', 0) == 1:
             return 'BUY', 'smc_reversal'
 
-        min_conf = 1.5 if ai_prob > 0.72 else 2.5
-        if feats.get('bullish_confluence', 0) >= min_conf and ai_prob > 0.70:
+        min_conf = 1.5 if ai_prob > 0.55 else 2.5
+        if feats.get('bullish_confluence', 0) >= min_conf and ai_prob > 0.50:
             return 'BUY', 'confluence'
 
-        if feats.get('choch_bull', 0) == 1.0 and ai_prob > 0.65:
+        if feats.get('choch_bull', 0) == 1.0 and ai_prob > 0.48:
             return 'BUY', 'choch'
 
-        min_bias = 0.8 if ai_prob > 0.72 else 1.5
-        if feats.get('net_bias', 0) > min_bias and ai_prob > 0.60:
+        min_bias = 0.8 if ai_prob > 0.55 else 1.5
+        if feats.get('net_bias', 0) > min_bias and ai_prob > 0.45:
             return 'BUY', 'momentum_bias'
 
         return None, 'no_conf_buy'
@@ -133,21 +131,21 @@ def chain_decision(ctx, mtf, buy_p, sell_p):
         if m5t not in ['bearish', 'range', None]:
             return None, 'trend_mismatch'
         if m15t == 'bullish':
-            if not (ai_prob >= 0.78 and h1t == 'bearish'):
+            if not (ai_prob >= 0.60 and h1t == 'bearish'):
                 return None, 'm15_conflict'
 
         if feats.get('bearish_reversal_setup', 0) == 1:
             return 'SELL', 'smc_reversal'
 
-        min_conf = 1.5 if ai_prob > 0.72 else 2.5
-        if feats.get('bearish_confluence', 0) >= min_conf and ai_prob > 0.70:
+        min_conf = 1.5 if ai_prob > 0.55 else 2.5
+        if feats.get('bearish_confluence', 0) >= min_conf and ai_prob > 0.50:
             return 'SELL', 'confluence'
 
-        if feats.get('choch_bear', 0) == 1.0 and ai_prob > 0.65:
+        if feats.get('choch_bear', 0) == 1.0 and ai_prob > 0.48:
             return 'SELL', 'choch'
 
-        min_bias = 0.8 if ai_prob > 0.72 else 1.5
-        if feats.get('net_bias', 0) < -min_bias and ai_prob > 0.60:
+        min_bias = 0.8 if ai_prob > 0.55 else 1.5
+        if feats.get('net_bias', 0) < -min_bias and ai_prob > 0.45:
             return 'SELL', 'momentum_bias'
 
         return None, 'no_conf_sell'
