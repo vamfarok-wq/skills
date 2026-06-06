@@ -226,8 +226,11 @@ for idx in range(test_start + CONTEXT, len(df) - 1):
     _atr = atr14(ctx)
     nb   = df.iloc[idx+1]; d = direction.lower()
     entry_p = float(nb['open']) + (SPREAD if d=='buy' else -SPREAD)
-    sl = entry_p - _atr*0.6 if d=='buy' else entry_p + _atr*0.6
-    tp = entry_p + _atr*1.5 if d=='buy' else entry_p - _atr*1.5
+    # SL widened 0.6→1.2×ATR: median candle range is 4.3pts, 0.6×ATR≈2.8pts
+    # means a single bar stops the trade. 1.2×ATR gives breathing room.
+    # TP scaled to 3.0×ATR to keep RR = 2.5.
+    sl = entry_p - _atr*1.2 if d=='buy' else entry_p + _atr*1.2
+    tp = entry_p + _atr*3.0 if d=='buy' else entry_p - _atr*3.0
 
     sl_pips = abs(entry_p - sl) / GOLD_PIP
     if sl_pips < SL_MIN_PIP or sl_pips > SL_MAX_PIP:
