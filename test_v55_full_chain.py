@@ -209,9 +209,12 @@ for idx in range(test_start + CONTEXT, len(df) - 1):
         m15t   = mtf['M15_trend']; h1t = mtf['H1_trend']
         all_bull = (m5t=='bullish' and m15t=='bullish' and h1t=='bullish')
         all_bear = (m5t=='bearish' and m15t=='bearish' and h1t=='bearish')
-        if all_bull and vel3 > SM_VEL and bias12 > SM_BIAS and buy_p > sell_p:
+        # No AI gate on velocity path: model trained on bull data says BUY=0.25
+        # during a −4.33 vel3 crash (June 5), actively blocking correct SELL.
+        # vel3>2.5 + bias>1.5 + 3TF alignment is already highly selective.
+        if all_bull and vel3 > SM_VEL and bias12 > SM_BIAS:
             direction = 'BUY';  signal_type = 'strong_momentum'
-        elif all_bear and vel3 < -SM_VEL and bias12 < -SM_BIAS and sell_p > buy_p:
+        elif all_bear and vel3 < -SM_VEL and bias12 < -SM_BIAS:
             direction = 'SELL'; signal_type = 'strong_momentum'
     else:
         vel3 = bias12 = 0.0
