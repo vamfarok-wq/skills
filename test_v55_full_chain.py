@@ -98,7 +98,9 @@ def chain_decision(ctx, mtf, buy_p, sell_p):
     # old 0.55/0.45 thresholds were calibrated for the biased model. SMC
     # signals + trend gates are the structural edge; AI just needs to lean.
 
-    m5t  = v55.detect_market_regime(ctx)
+    # SMC chain uses fast EMA 9/21 (responds in ~20 bars vs 50 for smooth).
+    # Smooth EMA 20/50 is kept only for velocity path to prevent mid-crash flips.
+    m5t  = v55.detect_market_regime(ctx, fast_ema=9, slow_ema=21)
     m15t = mtf['M15_trend']
     h1t  = mtf['H1_trend']
 
