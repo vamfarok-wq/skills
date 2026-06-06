@@ -194,7 +194,10 @@ for idx in range(test_start + CONTEXT, len(df) - 1):
         skips['session'] = skips.get('session', 0) + 1; continue
 
     mtf    = build_mtf(ctx)
-    m5t    = v55.detect_market_regime(ctx)
+    # Use fast EMA 9/21 everywhere — smooth EMA 20/50 can't flip fast enough
+    # to catch the June 5 −146pt crash or other quick reversals.
+    # The detrend label fix is what balances the AI, not the EMA change.
+    m5t    = v55.detect_market_regime(ctx, fast_ema=9, slow_ema=21)
     buy_p, sell_p = get_ai_probs(ctx, mtf)
 
     # ── Path 1: strong_momentum (velocity) ───────────────────────────────────
