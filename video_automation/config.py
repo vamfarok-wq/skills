@@ -35,12 +35,28 @@ class Config:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     def validate(self) -> list[str]:
-        """Return list of missing critical config keys."""
+        """Return list of missing critical config keys (blocks startup)."""
         missing = []
         if not self.ANTHROPIC_API_KEY:
             missing.append("ANTHROPIC_API_KEY")
-        if self.UPLOAD_TO_YOUTUBE and not self.YOUTUBE_REFRESH_TOKEN:
-            missing.append("YOUTUBE_REFRESH_TOKEN (run: python main.py setup --platform youtube)")
-        if self.UPLOAD_TO_TIKTOK and not self.TIKTOK_ACCESS_TOKEN:
-            missing.append("TIKTOK_ACCESS_TOKEN")
         return missing
+
+    def upload_warnings(self) -> list[str]:
+        """Return non-fatal warnings about missing upload credentials.
+
+        Missing upload credentials don't block running — videos are still
+        generated and saved locally; only the upload step is skipped.
+        """
+        import os
+        warnings = []
+        yt_token_file = os.path.join("credentials", "youtube_token.pickle")
+        if self.UPLOAD_TO_YOUTUBE and not (self.YOUTUBE_REFRESH_TOKEN or os.path.exists(yt_token_file)):
+            warnings.append(
+                "YouTube upload enabled but not authenticated "
+                "(run: python main.py setup --platform youtube). Videos will be saved locally only."
+            )
+        if self.UPLOAD_TO_TIKTOK and not self.TIKTOK_ACCESS_TOKEN:
+            warnings.append(
+                "TikTok upload enabled but TIKTOK_ACCESS_TOKEN not set. Videos will be saved locally only."
+            )
+        return warnings

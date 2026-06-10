@@ -106,7 +106,7 @@ class ContentGenerator:
         logger.info("Generating %s script for niche=%s", platform, niche.name)
 
         response = self.client.messages.create(
-            model="claude-opus-4-7",
+            model="claude-opus-4-8",
             max_tokens=4096,
             system=system,
             messages=[{"role": "user", "content": prompt}],

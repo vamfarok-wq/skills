@@ -347,9 +347,10 @@ tr:hover td { background: rgba(255,255,255,.03); }
             </select>
           </div>
           <div class="form-group" style="margin:0">
-            <label>Format</label>
-            <select id="genFormat" disabled>
-              <option>Auto (from platform)</option>
+            <label>Upload Mode</label>
+            <select id="genUploadMode">
+              <option value="upload">⬆ Save local + Upload</option>
+              <option value="local">💾 Save local only</option>
             </select>
           </div>
           <button class="btn btn-primary btn-lg" id="genBtn" onclick="startGenerate()" style="height:38px">⚡ Generate</button>
@@ -771,7 +772,8 @@ async function startGenerate() {
 
   const payload = {
     niche: document.getElementById("genNiche").value,
-    platform: document.getElementById("genPlatform").value
+    platform: document.getElementById("genPlatform").value,
+    upload_mode: document.getElementById("genUploadMode").value
   };
 
   try {

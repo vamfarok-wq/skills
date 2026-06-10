@@ -3,9 +3,10 @@
 Video Automation — YouTube & TikTok
 Usage:
   python main.py run                          # Start daily scheduler
-  python main.py generate                     # Generate one video now
+  python main.py generate                     # Generate one video now (saves + uploads)
   python main.py generate --niche tech        # Specific niche
   python main.py generate --platform tiktok   # Specific platform
+  python main.py generate --no-upload         # Save locally only, skip upload
   python main.py setup --platform youtube     # OAuth setup wizard
   python main.py setup --platform tiktok      # TikTok setup wizard
   python main.py status                       # Print stats
@@ -68,6 +69,9 @@ def cmd_run(args):
             print(f"  • {e}")
         print("\nEdit your .env file and re-run. See .env.example for reference.")
         sys.exit(1)
+
+    for warning in config.upload_warnings():
+        print(f"[WARNING] {warning}")
 
     from src.scheduler.runner import DailyScheduler
     scheduler = DailyScheduler(config)
@@ -139,6 +143,11 @@ def cmd_generate(args):
         tags=script.get("tags", []),
         file_path=video_path,
     )
+
+    if args.no_upload:
+        print("[4/4] Local-only mode — upload skipped.")
+        print(f"\n✓ Done! Video saved at: {video_path}")
+        return
 
     print("[4/4] Uploading …")
     if platform == "youtube" and config.UPLOAD_TO_YOUTUBE:
@@ -222,6 +231,8 @@ def main():
     gen_p = sub.add_parser("generate", help="Generate one video now")
     gen_p.add_argument("--niche", help="Niche name (see: niches command)")
     gen_p.add_argument("--platform", choices=["youtube", "tiktok"], default="youtube")
+    gen_p.add_argument("--no-upload", action="store_true",
+                       help="Save video locally only — skip uploading")
 
     setup_p = sub.add_parser("setup", help="Authentication setup wizard")
     setup_p.add_argument("--platform", choices=["youtube", "tiktok"], required=True)

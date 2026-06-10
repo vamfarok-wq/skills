@@ -51,7 +51,7 @@ _gen_status: dict = {
 _gen_lock = threading.Lock()
 
 _scheduler_thread: threading.Thread | None = None
-_scheduler_stop = threading.Event()
+_scheduler_obj = None  # DailyScheduler instance — needed to actually shut it down
 
 # ── .env helpers ──────────────────────────────────────────────────────────────
 
@@ -164,7 +164,11 @@ def api_generate():
     body = request.json or {}
     threading.Thread(
         target=_run_generate,
-        args=(body.get("niche", "tech"), body.get("platform", "youtube")),
+        args=(
+            body.get("niche", "tech"),
+            body.get("platform", "youtube"),
+            body.get("upload_mode", "upload"),  # "upload" or "local"
+        ),
         daemon=True,
     ).start()
     return jsonify({"ok": True})
@@ -190,10 +194,9 @@ def api_generate_stream():
 
 @app.route("/api/scheduler/start", methods=["POST"])
 def api_scheduler_start():
-    global _scheduler_thread, _scheduler_stop
+    global _scheduler_thread
     if _scheduler_thread and _scheduler_thread.is_alive():
         return jsonify({"ok": False, "error": "Scheduler already running"})
-    _scheduler_stop.clear()
     _scheduler_thread = threading.Thread(target=_run_scheduler, daemon=True)
     _scheduler_thread.start()
     return jsonify({"ok": True})
@@ -201,18 +204,22 @@ def api_scheduler_start():
 
 @app.route("/api/scheduler/stop", methods=["POST"])
 def api_scheduler_stop():
-    _scheduler_stop.set()
-    logger.info("Scheduler stop requested.")
+    global _scheduler_obj
+    if _scheduler_obj is not None:
+        try:
+            # shutdown() is safe to call from another thread and unblocks
+            # the BlockingScheduler.start() call in the worker thread.
+            _scheduler_obj.scheduler.shutdown(wait=False)
+            logger.info("Scheduler stopped.")
+        except Exception as exc:
+            logger.warning("Scheduler shutdown error: %s", exc)
+        _scheduler_obj = None
     return jsonify({"ok": True})
 
 
 @app.route("/api/scheduler/status")
 def api_scheduler_status():
-    running = bool(
-        _scheduler_thread
-        and _scheduler_thread.is_alive()
-        and not _scheduler_stop.is_set()
-    )
+    running = bool(_scheduler_thread and _scheduler_thread.is_alive())
     return jsonify({"running": running})
 
 
@@ -241,7 +248,7 @@ def _gen_step(msg: str, prog: float):
     logger.info("[Generate] %s", msg)
 
 
-def _run_generate(niche_name: str, platform: str):
+def _run_generate(niche_name: str, platform: str, upload_mode: str = "upload"):
     try:
         from config import Config
         from src.niches.manager import NicheManager
@@ -284,28 +291,39 @@ def _run_generate(niche_name: str, platform: str):
             niche_name, platform, script["title"], script["description"], script["tags"], path
         )
 
-        # Upload
-        uploaded = False
-        if platform == "youtube" and cfg.UPLOAD_TO_YOUTUBE and cfg.YOUTUBE_REFRESH_TOKEN:
-            _gen_step("Uploading to YouTube…", 0.93)
-            from src.upload.youtube import YouTubeUploader
-            r = YouTubeUploader(cfg).upload(path, script, niche)
-            db.save_upload(vid_id, "youtube", r["platform_id"], r["url"], "success")
+        # Upload — only when the user chose "Save + Upload" mode.
+        # The video file is ALWAYS kept in output/ regardless of mode.
+        if upload_mode == "local":
             with _gen_lock:
-                _gen_status["output"].append(f"  YouTube: {r['url']}")
-            uploaded = True
-        elif platform == "tiktok" and cfg.UPLOAD_TO_TIKTOK and cfg.TIKTOK_ACCESS_TOKEN:
-            _gen_step("Uploading to TikTok…", 0.93)
-            from src.upload.tiktok import TikTokUploader
-            r = TikTokUploader(cfg).upload(path, script, niche)
-            db.save_upload(vid_id, "tiktok", r["platform_id"], r["url"], "success")
-            with _gen_lock:
-                _gen_status["output"].append(f"  TikTok: {r['url']}")
-            uploaded = True
+                _gen_status["output"].append("  Local-only mode: upload skipped, video saved to output/")
+        else:
+            uploaded = False
+            try:
+                if platform == "youtube" and cfg.UPLOAD_TO_YOUTUBE:
+                    _gen_step("Uploading to YouTube…", 0.93)
+                    from src.upload.youtube import YouTubeUploader
+                    r = YouTubeUploader(cfg).upload(path, script, niche)
+                    db.save_upload(vid_id, "youtube", r["platform_id"], r["url"], "success")
+                    with _gen_lock:
+                        _gen_status["output"].append(f"  YouTube: {r['url']}")
+                    uploaded = True
+                elif platform == "tiktok" and cfg.UPLOAD_TO_TIKTOK and cfg.TIKTOK_ACCESS_TOKEN:
+                    _gen_step("Uploading to TikTok…", 0.93)
+                    from src.upload.tiktok import TikTokUploader
+                    r = TikTokUploader(cfg).upload(path, script, niche)
+                    db.save_upload(vid_id, "tiktok", r["platform_id"], r["url"], "success")
+                    with _gen_lock:
+                        _gen_status["output"].append(f"  TikTok: {r['url']}")
+                    uploaded = True
+            except Exception as exc:
+                db.save_upload(vid_id, platform, status="error", error=str(exc))
+                with _gen_lock:
+                    _gen_status["output"].append(f"  Upload failed: {exc}")
+                    _gen_status["output"].append("  Video is still saved locally in output/")
 
-        if not uploaded:
-            with _gen_lock:
-                _gen_status["output"].append("  Upload skipped (credentials not configured)")
+            if not uploaded:
+                with _gen_lock:
+                    _gen_status["output"].append("  Upload skipped (credentials not configured) — video saved to output/")
 
         _gen_step("Done! ✓", 1.0)
 
@@ -321,12 +339,16 @@ def _run_generate(niche_name: str, platform: str):
 
 
 def _run_scheduler():
+    global _scheduler_obj
     try:
         from config import Config
         from src.scheduler.runner import DailyScheduler
-        DailyScheduler(Config()).start()
+        _scheduler_obj = DailyScheduler(Config())
+        _scheduler_obj.start()  # blocks this thread until shutdown() is called
     except Exception as exc:
         logger.error("Scheduler crashed: %s", exc)
+    finally:
+        _scheduler_obj = None
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
