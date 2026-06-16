@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TikTok Shop Ad Maker</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>✨ TikTok Shop Ad Maker</h1>
+    <p class="tagline">Upload a product photo → get a ready-to-post ad video</p>
+  </header>
+
+  <!-- STEP 1: product -->
+  <section class="card" id="step1">
+    <h2><span class="num">1</span> Your product</h2>
+
+    <label class="drop" id="drop">
+      <input type="file" id="photo" accept="image/*" hidden>
+      <div id="dropInner">
+        <div class="drop-icon">📸</div>
+        <div><b>Tap to upload</b> your product photo</div>
+        <small>JPG, PNG or WEBP</small>
+      </div>
+      <img id="preview" alt="preview" hidden>
+    </label>
+
+    <div class="grid">
+      <div class="field">
+        <label>Product name</label>
+        <input type="text" id="product_name" placeholder="e.g. Vitamin C Glow Serum">
+      </div>
+      <div class="field">
+        <label>Category</label>
+        <select id="niche"></select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Short description / key points <span class="muted">(optional)</span></label>
+      <textarea id="details" rows="2" placeholder="e.g. Brightening serum with vitamin C and hyaluronic acid"></textarea>
+    </div>
+
+    <details class="more">
+      <summary>More options (voice, style, your @handle…)</summary>
+      <div class="grid">
+        <div class="field">
+          <label>Voice</label>
+          <select id="voice"></select>
+        </div>
+        <div class="field">
+          <label>Tone</label>
+          <select id="tone"></select>
+        </div>
+        <div class="field">
+          <label>Video style</label>
+          <select id="style"></select>
+        </div>
+        <div class="field">
+          <label>Your @handle <span class="muted">(optional)</span></label>
+          <input type="text" id="handle" placeholder="@yourpage">
+        </div>
+        <div class="field">
+          <label>Price to mention <span class="muted">(optional)</span></label>
+          <input type="text" id="price" placeholder="$19.99">
+        </div>
+        <div class="field checkbox">
+          <label><input type="checkbox" id="use_music"> Add background music<br>
+            <small class="muted">(from the assets/music folder)</small></label>
+        </div>
+      </div>
+      <div class="field checkbox" id="aiRow" hidden>
+        <label><input type="checkbox" id="use_ai"> Use AI to read the photo &amp; write the script</label>
+      </div>
+      <p id="styleNote" class="note" hidden></p>
+    </details>
+
+    <button class="btn primary" id="btnScript">Write my ad script →</button>
+  </section>
+
+  <!-- STEP 2: script -->
+  <section class="card hidden" id="step2">
+    <h2><span class="num">2</span> Your script <span class="muted">(edit anything!)</span></h2>
+    <p class="muted small">These lines are spoken and shown on screen. Tweak them to be perfect, then make the video.</p>
+    <div id="scriptList"></div>
+    <div class="field">
+      <label>TikTok caption to post <span class="muted">(saved as a .txt next to your video)</span></label>
+      <textarea id="tiktok_caption" rows="4"></textarea>
+    </div>
+    <div class="row-btns">
+      <button class="btn ghost" id="btnBack">← Back</button>
+      <button class="btn primary" id="btnGenerate">🎬 Make my video</button>
+    </div>
+  </section>
+
+  <!-- STEP 3: progress -->
+  <section class="card hidden" id="step3">
+    <h2><span class="num">3</span> Creating your video…</h2>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <p id="progressMsg" class="muted">Starting…</p>
+    <p class="muted small">This usually takes under a minute. Please keep this tab open.</p>
+  </section>
+
+  <!-- STEP 4: result -->
+  <section class="card hidden" id="step4">
+    <h2>🎉 Your video is ready!</h2>
+    <video id="resultVideo" controls playsinline></video>
+    <p id="savedPath" class="muted small"></p>
+    <div class="row-btns">
+      <a class="btn primary" id="btnDownload" download>⬇ Download video</a>
+      <a class="btn ghost" id="btnCaption" target="_blank">📋 Caption &amp; hashtags</a>
+    </div>
+    <button class="btn ghost wide" id="btnAnother">＋ Make another video</button>
+    <p id="voiceWarn" class="note" hidden></p>
+  </section>
+
+  <p class="footer">Runs 100% on your computer. Your photos and videos never leave your machine.</p>
+</div>
+
+<div id="toast" class="toast"></div>
+<script src="/web/app.js"></script>
+</body>
+</html>

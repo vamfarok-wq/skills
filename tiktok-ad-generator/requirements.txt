@@ -1,0 +1,20 @@
+# Core app
+flask>=3.0
+
+# Image + video (imageio-ffmpeg bundles its own ffmpeg, so you DON'T need to
+# install ffmpeg separately)
+pillow>=10.2
+imageio-ffmpeg>=0.5.1
+
+# Free voiceover (no API key needed)
+edge-tts>=6.1
+mutagen>=1.47
+
+# Used to bundle/fetch fonts if ever needed
+requests>=2.31
+
+# --- Optional extras (the app works without these) ---
+# Offline voice fallback (uses your computer's built-in voices):
+pyttsx3>=2.90
+# AI script writing from the photo (only used if you set ANTHROPIC_API_KEY):
+# anthropic>=0.40

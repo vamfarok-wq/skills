@@ -1,0 +1,8 @@
+# Generated videos & working files (keep these out of git)
+output/
+.venv/
+__pycache__/
+*.pyc
+
+# Keep the folders themselves
+!assets/music/
