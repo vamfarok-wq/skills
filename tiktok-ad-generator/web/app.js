@@ -82,6 +82,8 @@ $("btnScript").addEventListener("click", async () => {
 
     const data = await (await fetch("/api/script", { method: "POST", body: fd })).json();
     renderScript(data);
+    toast(data.ai_used ? "✨ AI wrote this from your photo — edit away!"
+                       : "Script ready — edit any line you like!");
     hide("step1"); show("step2");
     window.scrollTo({ top: 0, behavior: "smooth" });
   } catch (e) {

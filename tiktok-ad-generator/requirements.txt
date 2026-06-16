@@ -17,4 +17,4 @@ requests>=2.31
 # Offline voice fallback (uses your computer's built-in voices):
 pyttsx3>=2.90
 # AI script writing from the photo (only used if you set ANTHROPIC_API_KEY):
-# anthropic>=0.40
+anthropic>=0.40

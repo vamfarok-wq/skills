@@ -99,6 +99,7 @@ DEFAULT_TONE = "friendly"
 # Video styles offered in the UI.
 STYLES = [
     ("animation", "Dynamic Animation (recommended)"),
+    ("hype", "Bold & Hype (max motion + sparkles)"),
     ("showcase", "Clean Showcase (slower, premium)"),
     ("human", "AI Human Presenter (needs paid add-on)"),
 ]

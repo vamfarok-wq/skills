@@ -90,16 +90,23 @@ Your videos are saved in the **`output/`** folder inside this app.
 **Background music** — drop one music file into `assets/music/` and tick
 "Add background music". Use royalty-free music (see `assets/music/README.txt`).
 
+**Video styles** — in "More options" you can pick:
+- **Dynamic Animation** (recommended): smooth motion, highlighted keywords, soft sparkles.
+- **Bold & Hype**: bigger zoom and more sparkle/energy — great for hooking fast scrollers.
+- **Clean Showcase**: slower and elegant — nice for premium/luxury products.
+- **AI Human Presenter**: needs a paid avatar add-on (falls back to animation for now).
+
 **Different voices / tones** — pick from the "More options" menu. Voices are free
 (Microsoft Edge voices) and need an internet connection. No internet? The app
 still makes the video with captions (and tries your computer's built-in voice).
 
 **AI script from the photo (optional, paid)** — if you have an Anthropic API key,
-set it before starting and the app can read your photo and draft tailored copy:
+set it before you start the app, and it will read your photo and draft tailored
+copy (the `anthropic` library is already installed for you):
 
 - Windows (in the black window before it starts): `set ANTHROPIC_API_KEY=your-key`
 - Mac/Linux: `export ANTHROPIC_API_KEY=your-key`
-- Then also uncomment `anthropic` in `requirements.txt` and re-run the start script.
+- Then start the app as usual. You'll see an "AI" checkbox in More options.
 
 **AI human presenter (optional, paid)** — to enable a real talking avatar, you'd
 add a HeyGen/D-ID account + key. The "AI Human Presenter" option is wired to fall

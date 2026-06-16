@@ -263,8 +263,21 @@ def generate_with_ai(image_path, product_name, niche, tone, handle="", price="")
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         start, end = text.find("{"), text.rfind("}")
         data = json.loads(text[start:end + 1])
-        if data.get("scenes"):
-            return data
+
+        # normalise so the rest of the app can rely on the shape
+        norm = []
+        for s in data.get("scenes", []):
+            v = (s.get("voice") or s.get("caption") or "").strip()
+            if not v:
+                continue
+            norm.append({"kind": s.get("kind") or "benefit",
+                         "voice": v,
+                         "caption": (s.get("caption") or v).strip()})
+        if not norm:
+            return None
+        return {"scenes": norm,
+                "tiktok_caption": data.get("tiktok_caption", ""),
+                "hashtags": data.get("hashtags", [])}
     except Exception:
         return None
     return None

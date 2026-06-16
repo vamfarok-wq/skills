@@ -95,9 +95,11 @@ def make_script():
         if img_path:
             result = copywriter.generate_with_ai(img_path, product_name, niche, tone,
                                                  handle=handle, price=price)
+    ai_used = result is not None
     if not result:
         result = copywriter.generate_script(product_name, niche, tone, details=details,
                                             benefits=benefits, handle=handle, price=price)
+    result["ai_used"] = ai_used
     return jsonify(result)
 
 
